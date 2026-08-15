@@ -115,6 +115,34 @@ describe('credential failures', () => {
       });
     }));
 
+  it('catches a token that cannot be sent as a header, before the request is built', () =>
+    withCodexHome(async (codexHome) => {
+      // Left to reach `fetch`, this arrives as a network error quoting the whole
+      // `Bearer <token>` — and a token broken only by a stray newline is still a
+      // working token to whoever reads it out of the log. Caught here it is an
+      // instruction instead.
+      const secret = 'SECRETTOKENMATERIAL';
+      await writeAuthFile(codexHome, { accessToken: `eyJhbGciOi.${secret}\ntrailing` });
+
+      await assert.rejects(readAuth({ codexHome }), (error) => {
+        assert.equal(error.status, 503);
+        assert.match(error.message, /cannot be sent in an HTTP header/);
+        assert.match(error.hint, /codex login/);
+        assert.ok(!error.detail.includes(secret), 'the token must not be quoted');
+        return true;
+      });
+    }));
+
+  it('catches an account id that cannot be sent as a header', () =>
+    withCodexHome(async (codexHome) => {
+      await writeAuthFile(codexHome, { accountId: 'acct\r\nX-Injected: yes' });
+
+      await assert.rejects(readAuth({ codexHome }), (error) => {
+        assert.match(error.message, /account id with characters that cannot be sent/);
+        return true;
+      });
+    }));
+
   it('never quotes the file when it will not parse, because the file is credentials', () =>
     withCodexHome(async (codexHome) => {
       // Node's JSON parser names the text it choked on — `Unexpected token 'g',

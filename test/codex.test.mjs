@@ -245,7 +245,36 @@ describe('when the endpoint refuses', () => {
     await assert.rejects(transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url }), (error) => {
       assert.equal(error.status, 502);
       assert.match(error.message, /Cannot reach/);
+      // The diagnostic half must survive: `fetch` reports transport failures as
+      // a generic "fetch failed" with the real reason on `error.cause`, and it
+      // is the cause that says what actually went wrong.
+      assert.match(error.message, /ECONNREFUSED/);
       return true;
+    });
+  });
+
+  it('never quotes the token when the request cannot even be built', async () => {
+    // A token corrupted by a stray newline is still a working token to whoever
+    // reads it back out of a log. Node refuses the header with
+    // `Headers.append: "Bearer <the whole token>" is an invalid header value.`,
+    // and that message would otherwise travel into the log, the HTTP response,
+    // and /health.
+    const secret = 'SECRETTOKENMATERIAL';
+    const broken = `eyJhbGciOiJSUzI1NiJ9.${secret}\ntrailing`;
+
+    await withServer(undefined, async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, accessToken: broken, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.equal(error.status, 502);
+          assert.ok(!error.detail.includes(secret), 'token material leaked');
+          assert.ok(!error.detail.includes('eyJ'), 'token material leaked');
+          assert.match(error.message, /could not be built/);
+          assert.match(error.hint, /corrupted auth\.json/);
+          return true;
+        },
+      );
+      assert.equal(server.requests.length, 0, 'nothing should have reached the endpoint');
     });
   });
 });

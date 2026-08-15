@@ -21,6 +21,20 @@ import { authError } from './errors.mjs';
 /** Shape written by `codex login` with a ChatGPT account (OAuth). */
 const CHATGPT_AUTH_MODE = 'chatgpt';
 
+/**
+ * Printable ASCII: what may legally travel in an HTTP header value.
+ *
+ * A JWT is base64url and an account id is a UUID, so neither has any business
+ * containing anything else. The check exists because of what happens when one
+ * does: Node's `fetch` refuses the header with
+ * `Headers.append: "Bearer <the whole token>" is an invalid header value.`
+ * Caught here, a corrupted token is a clear instruction to log in again. Caught
+ * at the request, it is a network error carrying the token into the log, the
+ * HTTP response, and `/health` — and a token broken only by a stray newline is
+ * still a working token to whoever reads it back out.
+ */
+const HEADER_SAFE = /^[\x20-\x7e]+$/;
+
 export function authFilePath(codexHome) {
   return join(codexHome, 'auth.json');
 }
@@ -134,10 +148,23 @@ export async function readAuth({ codexHome, now = Date.now, read = readFile }) {
     );
   }
 
+  if (!HEADER_SAFE.test(accessToken)) {
+    throw authError(
+      `${path} holds an access token with characters that cannot be sent in an HTTP header.`,
+      'The file looks corrupted; run `codex login` to rewrite it. The token itself is deliberately not quoted here.',
+    );
+  }
+
   const accountId =
     typeof tokens.account_id === 'string' && tokens.account_id.trim() !== ''
       ? tokens.account_id.trim()
       : null;
+  if (accountId !== null && !HEADER_SAFE.test(accountId)) {
+    throw authError(
+      `${path} holds an account id with characters that cannot be sent in an HTTP header.`,
+      'The file looks corrupted; run `codex login` to rewrite it.',
+    );
+  }
   if (accountId === null) {
     // Not fatal: the header is only sent when the field exists, and the
     // endpoint may well authorise from the token alone. Worth a line, because

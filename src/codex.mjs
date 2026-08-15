@@ -135,8 +135,22 @@ export async function transcribe({
         'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
       );
     }
+    // `error.message` is never used here. Measured behaviour of Node's fetch:
+    // a transport failure is the generic `fetch failed` with the real reason on
+    // `error.cause`, while a failure to *build* the request quotes the offending
+    // argument — and one of those arguments is `Authorization: Bearer <token>`.
+    // Taking the detail only from `cause` keeps the useful half and drops the
+    // half that can carry credentials.
+    const cause = error?.cause;
+    if (cause === null || cause === undefined) {
+      throw upstreamError(
+        `Cannot reach ${url}: the request could not be built (${error?.name ?? 'Error'}).`,
+        'Details are withheld because this error quotes its arguments, one of which is the access token. ' +
+          'A corrupted auth.json is the usual cause; run `codex login`.',
+      );
+    }
     throw upstreamError(
-      `Cannot reach ${url}: ${error.message}`,
+      `Cannot reach ${url}: ${cause.code ?? cause.message ?? String(cause)}`,
       'Check network access to the endpoint from this machine.',
     );
   } finally {
