@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
 import { loadConfig, loadDotEnvInto, parseDotEnv } from '../src/config.mjs';
 import { makeTempDir, removeDir } from './helpers.mjs';
@@ -12,13 +12,15 @@ import { makeTempDir, removeDir } from './helpers.mjs';
  * startup, not quietly move the listener somewhere Handy is not looking.
  */
 
-let dir;
-before(async () => {
-  dir = await makeTempDir('shim-config-');
-});
-after(async () => {
-  await removeDir(dir);
-});
+/** A private directory per test, created and removed inside it. */
+async function withDir(run) {
+  const dir = await makeTempDir('shim-config-');
+  try {
+    return await run(dir);
+  } finally {
+    await removeDir(dir);
+  }
+}
 
 describe('.env parsing', () => {
   it('reads keys, comments, and quotes', () => {
@@ -47,21 +49,23 @@ describe('.env parsing', () => {
     assert.deepEqual({ ...parseDotEnv('just a line\n=novalue\n1BAD=x') }, {});
   });
 
-  it('lets the real environment win over the file', async () => {
-    // A service unit has to be able to override a value without editing a file
-    // that is deliberately not in the repository.
-    const path = join(dir, '.env');
-    await writeFile(path, 'SHIM_PORT=9000\nSHIM_HOST=10.0.0.1\n');
+  it('lets the real environment win over the file', () =>
+    withDir(async (dir) => {
+      // A service unit has to be able to override a value without editing a
+      // file that is deliberately not in the repository.
+      const path = join(dir, '.env');
+      await writeFile(path, 'SHIM_PORT=9000\nSHIM_HOST=10.0.0.1\n');
 
-    const env = { SHIM_PORT: '8756' };
-    assert.equal(loadDotEnvInto(env, path), true);
-    assert.equal(env.SHIM_PORT, '8756');
-    assert.equal(env.SHIM_HOST, '10.0.0.1');
-  });
+      const env = { SHIM_PORT: '8756' };
+      assert.equal(loadDotEnvInto(env, path), true);
+      assert.equal(env.SHIM_PORT, '8756');
+      assert.equal(env.SHIM_HOST, '10.0.0.1');
+    }));
 
-  it('reports a missing file without throwing', () => {
-    assert.equal(loadDotEnvInto({}, join(dir, 'nothing-here')), false);
-  });
+  it('reports a missing file without throwing', () =>
+    withDir(async (dir) => {
+      assert.equal(loadDotEnvInto({}, join(dir, 'nothing-here')), false);
+    }));
 });
 
 describe('defaults', () => {
