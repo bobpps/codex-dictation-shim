@@ -101,6 +101,16 @@ export function chatCompletionEnvelope({ content, model, createdSec, id }) {
   };
 }
 
+/**
+ * Bound a value taken from a request before it reaches a log line or an error
+ * body. Nothing here is speech, but it is all client-controlled and unbounded,
+ * and an unbounded value on a published surface is a log nobody can read.
+ */
+export function clip(value, limit = 120) {
+  const text = String(value);
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
+}
+
 /** Strip the query string and an optional `/v1` prefix. */
 export function normalizeRoute(url) {
   const path = (url ?? '/').split('?')[0];
@@ -238,8 +248,8 @@ export async function createApp({ config, logger }) {
     const draft = draftFromRequest(body);
     logger.info('dictation request', {
       request: requestId,
-      mode: field === null ? 'legacy' : `schema:${field}`,
-      model: typeof body?.model === 'string' ? body.model : '-',
+      mode: field === null ? 'legacy' : `schema:${clip(field, 64)}`,
+      model: typeof body?.model === 'string' ? clip(body.model, 64) : '-',
       draft: logger.text(draft ?? ''),
     });
 
@@ -342,7 +352,7 @@ export async function createApp({ config, logger }) {
       return sendJson(res, report.status === 'ok' ? 200 : 503, report);
     }
 
-    throw new ShimError(`No route for ${method} ${path}.`, {
+    throw new ShimError(`No route for ${clip(method, 16)} ${clip(path)}.`, {
       status: 404,
       code: 'not_found',
       hint: 'Handy\'s base URL should be http://host:port/v1 — the shim serves /v1/chat/completions.',
