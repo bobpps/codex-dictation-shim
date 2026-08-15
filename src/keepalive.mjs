@@ -40,16 +40,21 @@ export function createKeepalive({ config, logger, execFileFn = execFile }) {
         bin,
         args,
         { timeout: settings.timeoutMs, windowsHide: true, encoding: 'utf8' },
-        (error, stdout, stderr) => {
+        (error, _stdout, stderr) => {
           if (error) {
             const reason =
               error.code === 'ENOENT'
                 ? `${bin} not found on PATH`
                 : (stderr || error.message || 'unknown failure').trim();
-            resolve({ ok: false, message: reason });
+            resolve({ ok: false, message: reason.slice(0, 200) });
             return;
           }
-          resolve({ ok: true, message: (stdout || '').trim().split('\n').at(-1) ?? '' });
+          // The command's own output is not kept. `codex login status` names
+          // the signed-in account, and this value is published by `/health`;
+          // meanwhile the authoritative answer to "is the token alive" is the
+          // expiry `/health` already reports straight from auth.json, which
+          // beats parsing a CLI's prose for it.
+          resolve({ ok: true, message: null });
         },
       );
     });

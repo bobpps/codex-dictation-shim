@@ -219,13 +219,18 @@ export async function createApp({ config, logger }) {
     let body;
     try {
       body = JSON.parse(raw);
-    } catch (error) {
+    } catch {
       // 400 is deliberately reserved for this case. Handy cannot produce it —
       // it serializes its own struct — so a 400 here means a human with curl,
       // and it will not trigger Handy's retry-without-reasoning-fields path.
-      throw new ShimError(`Request body is not JSON: ${error.message}`, {
+      //
+      // The parser's message is left out for the same reason it is left out of
+      // `auth.mjs` and `codex.mjs`: Node quotes the text around the failure,
+      // and the text here is the draft transcript.
+      throw new ShimError('Request body is not JSON.', {
         status: 400,
         code: 'invalid_request',
+        hint: 'The parser message is withheld because it would quote the draft transcript.',
       });
     }
 

@@ -115,6 +115,33 @@ describe('credential failures', () => {
       });
     }));
 
+  it('never quotes the file when it will not parse, because the file is credentials', () =>
+    withCodexHome(async (codexHome) => {
+      // Node's JSON parser names the text it choked on — `Unexpected token 'g',
+      // "garbage eyJ..." is not valid JSON`. In this file that text is an
+      // access token, and the message would travel to the log, to the HTTP
+      // response, and to /health.
+      const secret = 'eyJhbGciOiJSUzI1NiJ9.SECRETTOKENMATERIAL';
+      const path = join(codexHome, 'auth.json');
+
+      for (const broken of [
+        `garbage ${secret}`,
+        `{"auth_mode":"chatgpt","tokens":{"access_token":"${secret}"`,
+      ]) {
+        await writeFile(path, broken);
+        await assert.rejects(readAuth({ codexHome }), (error) => {
+          // Asserted as an exact string rather than as an absence of
+          // substrings: which text Node quotes depends on where the input
+          // breaks and on the Node version, so the invariant worth pinning is
+          // that the message is fixed, not that one particular leak is gone.
+          assert.equal(error.message, `${path} is not valid JSON.`);
+          assert.ok(!error.detail.includes('SECRET'), 'token material leaked');
+          assert.ok(!error.detail.includes('eyJ'), 'token material leaked');
+          return true;
+        });
+      }
+    }));
+
   it('refuses an empty access token', () =>
     withCodexHome(async (codexHome) => {
       await writeFile(
@@ -151,6 +178,25 @@ describe('degraded but usable credentials', () => {
       assert.equal(auth.expiresAtMs, null);
       assert.equal(auth.expiresInSec, null);
       assert.match(auth.warnings.join(' '), /not a readable JWT/);
+    }));
+
+  it('never quotes token material when the payload segment will not parse', () =>
+    withCodexHome(async (codexHome) => {
+      // Same defect one level down: the payload is decoded token content, so
+      // the parser's message about it must not reach a warning — and warnings
+      // are published by /health.
+      const claim = 'SECRETCLAIMDATA';
+      const payload = Buffer.from(`garbage ${claim}`).toString('base64url');
+      await writeAuthFile(codexHome, { accessToken: `header.${payload}.signature` });
+
+      const auth = await readAuth({ codexHome });
+      const warnings = auth.warnings.join(' ');
+      assert.match(warnings, /not a readable JWT \(payload segment is not JSON\)/);
+      assert.ok(!warnings.includes(claim), 'token material leaked into a warning');
+      assert.ok(!warnings.includes('garbage'));
+
+      const published = JSON.stringify(await describeAuth({ codexHome }));
+      assert.ok(!published.includes(claim), 'token material leaked into /health');
     }));
 
   it('warns when the token carries no exp claim', () =>

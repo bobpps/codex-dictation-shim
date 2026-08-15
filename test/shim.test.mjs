@@ -248,6 +248,37 @@ describe('failing loudly, and falling back', () => {
     });
   });
 
+  it('never quotes the draft when the body will not parse', async () => {
+    // Node's parser names the text it choked on, and the body of this request
+    // is the draft transcript. Without care that message reaches the log,
+    // `lastError`, the HTTP response, and /health, with SHIM_LOG_TRANSCRIPTS
+    // still off.
+    const spoken = 'the sentence I said out loud a moment ago';
+
+    await withShim({}, async ({ call, logger }) => {
+      const response = await call('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: `garbage ${spoken}`,
+      });
+      assert.equal(response.status, 400);
+
+      const errorBody = await response.text();
+      const health = await (await call('/health')).text();
+
+      for (const [where, text] of [
+        ['the error response', errorBody],
+        ['the log', JSON.stringify(logger.lines)],
+        ['/health', health],
+      ]) {
+        for (let at = 0; at + 8 <= spoken.length; at += 1) {
+          const fragment = spoken.slice(at, at + 8);
+          assert.ok(!text.includes(fragment), `draft fragment "${fragment}" leaked into ${where}`);
+        }
+      }
+    });
+  });
+
   it('refuses a body larger than the limit', async () => {
     await withShim({ env: { MAX_BODY_BYTES: '2048' } }, async ({ call }) => {
       const response = await call('/v1/chat/completions', {

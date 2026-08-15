@@ -39,7 +39,17 @@ export function decodeJwtPayload(token) {
     throw new Error(`expected 3 dot-separated segments, got ${parts.length}`);
   }
   const json = Buffer.from(parts[1], 'base64url').toString('utf8');
-  const payload = JSON.parse(json);
+
+  let payload;
+  try {
+    payload = JSON.parse(json);
+  } catch {
+    // The parser's own message can quote the text it choked on, and that text
+    // is decoded token material. This message reaches a warning that `/health`
+    // publishes, so it says what failed and nothing about what was in it.
+    throw new Error('payload segment is not JSON');
+  }
+
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('payload is not a JSON object');
   }
@@ -85,10 +95,14 @@ export async function readAuth({ codexHome, now = Date.now, read = readFile }) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
-  } catch (error) {
+  } catch {
+    // Deliberately without the parser's message. Node quotes the text around
+    // the failure, and in this file that text is an access token or a refresh
+    // token — which would then be in the log, in the HTTP response, and in
+    // `/health`. The operator can look at the file directly; the log cannot.
     throw authError(
-      `${path} is not valid JSON: ${error.message}`,
-      'Run `codex login` to rewrite it.',
+      `${path} is not valid JSON.`,
+      `Run \`codex login\` to rewrite it, or inspect it yourself with \`jq . ${path}\`.`,
     );
   }
 
