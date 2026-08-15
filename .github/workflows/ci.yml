@@ -50,6 +50,7 @@ jobs:
             'npm-shrinkwrap.json' '**/npm-shrinkwrap.json' \
             'yarn.lock' '**/yarn.lock' \
             'pnpm-lock.yaml' '**/pnpm-lock.yaml' \
+            'bun.lock' '**/bun.lock' \
             'bun.lockb' '**/bun.lockb')
           if [ -n "$tracked" ]; then
             echo "This project is meant to have no dependencies, but these are tracked:"
@@ -66,26 +67,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The second line behind .gitignore, and it has to cover the same set. A
-      # `git add -f .env` or a copy of auth.json made during a drill is exactly
-      # what this exists to catch — both would publish live credentials, and the
-      # WAV rule exists because recordings are dictated speech.
+      # The second line behind .gitignore, and it asks .gitignore itself rather
+      # than restating it. `git check-ignore --no-index` answers "would this
+      # tracked file have been ignored", so the rule enforced here is exactly
+      # "nothing matching .gitignore may be tracked" — including its negations,
+      # which is why `.env.example` and `test/fixtures/sample.wav` stay allowed.
       #
-      # `logs/` is matched as a directory, not just by the `.log` suffix:
-      # .gitignore excludes the whole directory, so `logs/probe-output` or
-      # `logs/session.txt` are just as private and would otherwise sail through.
-      # Git pathspec globs match `/` with a plain `*`, so `logs/*` covers nested
-      # paths too; `**/logs/*` covers the directory appearing further down.
-      - name: Refuse tracked secrets, recordings, and logs
+      # A restated list was tried first and drifted three times: `logs/` was
+      # missed because only `*.log` was listed, and `.env` was missed at any
+      # depth because a pathspec without a wildcard matches only the root, while
+      # `*.log` and `*.wav` happen to match nested paths since a pathspec `*`
+      # also matches `/`. Half right, and unreadably so. A list that has to be
+      # kept in step with another list will fall out of step.
+      #
+      # This catches a `git add -f .env` or a copy of auth.json made during a
+      # drill — both publish live credentials — and any recording or log, which
+      # hold dictated speech.
+      - name: Refuse tracked files that .gitignore excludes
         run: |
-          tracked=$(git ls-files -- \
-            '.env' '.env.*' ':(exclude).env.example' \
-            'auth.json' '**/auth.json' \
-            '*.log' 'npm-debug.log*' \
-            'logs/*' '**/logs/*' \
-            '*.wav' ':(exclude)test/fixtures/*.wav')
+          # Self-test first: a guard that silently stops working is worse than
+          # no guard, and this one would go quiet if check-ignore ever changed
+          # its interface or stopped seeing .gitignore.
+          if [ "$(printf '.env' | git check-ignore --no-index --stdin)" != ".env" ]; then
+            echo "The guard itself is broken: git check-ignore does not report .env as ignored."
+            exit 1
+          fi
+
+          tracked=$(git ls-files -z | git check-ignore --no-index --stdin -z | tr '\0' '\n' || true)
           if [ -n "$tracked" ]; then
-            echo "These files must never be committed:"
+            echo "These files match .gitignore and must never be committed:"
             echo "$tracked"
             exit 1
           fi
