@@ -11,7 +11,7 @@ import { loadConfig } from './config.mjs';
 import { ShimError } from './errors.mjs';
 import { describeRecordingsDir, resolveRecordingsDir } from './handy-paths.mjs';
 import { createKeepalive } from './keepalive.mjs';
-import { createLogger } from './log.mjs';
+import { clip, createLogger } from './log.mjs';
 import { claimRecording, createDedupeStore } from './recording.mjs';
 
 /**
@@ -99,16 +99,6 @@ export function chatCompletionEnvelope({ content, model, createdSec, id }) {
     ],
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   };
-}
-
-/**
- * Bound a value taken from a request before it reaches a log line or an error
- * body. Nothing here is speech, but it is all client-controlled and unbounded,
- * and an unbounded value on a published surface is a log nobody can read.
- */
-export function clip(value, limit = 120) {
-  const text = String(value);
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
 
 /** Strip the query string and an optional `/v1` prefix. */

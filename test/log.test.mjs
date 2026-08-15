@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createLogger } from '../src/log.mjs';
-import { clip } from '../src/shim.mjs';
+import { clip, createLogger } from '../src/log.mjs';
 
 /**
  * The log is a published surface: it holds speech if allowed to, it is read by

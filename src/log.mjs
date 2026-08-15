@@ -14,6 +14,20 @@ const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
 
 export const LOG_LEVELS = Object.freeze(Object.keys(LEVELS));
 
+/**
+ * Bound a value that came from outside before it reaches a log line or an error
+ * message. Lives here rather than in the shim so that `auth.mjs` can use it
+ * too — the shim already imports `auth.mjs`, so the dependency has to run this
+ * way round.
+ *
+ * Nothing this bounds is secret; the point is that an unbounded value on a
+ * published surface produces a log nobody can read.
+ */
+export function clip(value, limit = 120) {
+  const text = String(value);
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
+}
+
 export function createLogger({ level = 'info', logTranscripts = false, sink = console } = {}) {
   const threshold = LEVELS[level];
   if (threshold === undefined) {

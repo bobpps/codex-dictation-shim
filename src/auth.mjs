@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { authError } from './errors.mjs';
+import { clip } from './log.mjs';
 
 /**
  * Reading Codex credentials.
@@ -127,7 +128,7 @@ export async function readAuth({ codexHome, now = Date.now, read = readFile }) {
   const authMode = typeof parsed?.auth_mode === 'string' ? parsed.auth_mode : null;
   const tokens = parsed?.tokens;
   if (tokens === null || typeof tokens !== 'object') {
-    const detail = authMode === null ? 'no auth_mode field' : `auth_mode is "${authMode}"`;
+    const detail = authMode === null ? 'no auth_mode field' : `auth_mode is "${clip(authMode, 32)}"`;
     throw authError(
       `${path} has no "tokens" object (${detail}).`,
       'The transcribe endpoint needs a ChatGPT login. Run `codex login` without --with-api-key.',
@@ -135,7 +136,7 @@ export async function readAuth({ codexHome, now = Date.now, read = readFile }) {
   }
   if (authMode !== null && authMode !== CHATGPT_AUTH_MODE) {
     throw authError(
-      `${path} has auth_mode "${authMode}", not "${CHATGPT_AUTH_MODE}".`,
+      `${path} has auth_mode "${clip(authMode, 32)}", not "${CHATGPT_AUTH_MODE}".`,
       'The transcribe endpoint needs a ChatGPT login. Run `codex login` without --with-api-key.',
     );
   }
