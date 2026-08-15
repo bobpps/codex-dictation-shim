@@ -47,8 +47,10 @@ Dictated speech is personal. Transcripts are redacted from logs unless `SHIM_LOG
 or returns transcript text by default, and do not put real transcripts in tests, issues, or commit
 messages.
 
-`.env`, `auth.json`, `*.wav` outside `test/fixtures/`, and `*.log` are ignored by git and enforced by
-CI. Keep both lists in agreement when you change either.
+`.env`, `auth.json`, `*.wav` outside `test/fixtures/`, and `*.log` are ignored by git, and CI refuses
+any tracked file that `.gitignore` excludes — it asks `git check-ignore` rather than keeping a second
+copy of the rules, so adding a rule to `.gitignore` is all that is needed. Do not reintroduce a
+restated list: one was tried and drifted out of step three times.
 
 ## Tests
 
