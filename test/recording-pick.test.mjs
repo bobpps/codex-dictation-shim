@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { appendFile, writeFile } from 'node:fs/promises';
+import { appendFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -82,6 +82,29 @@ describe('guard: freshness', () => {
     withRecordings(async ({ dir, claim }) => {
       await writeRecording(dir, 'handy-recent.wav', { ageSec: 55 });
       assert.ok((await claim()).path.endsWith('handy-recent.wav'));
+    }));
+
+  it('refuses a recording dated in the future', () =>
+    withRecordings(async ({ dir, claim }) => {
+      // The failure that looks like success: a negative age is never "older
+      // than MAX_AGE_SEC", and the highest mtime always wins the newest-file
+      // contest — so one stale, clock-skewed recording would be picked and
+      // accepted for every dictation from then on. A clock stepped backwards or
+      // a recordings directory on a filesystem with its own clock is enough.
+      await writeRecording(dir, 'handy-from-the-future.wav', { ageSec: -3600 });
+
+      await assert.rejects(claim(), (error) => {
+        assert.equal(error.status, 409);
+        assert.match(error.message, /dated 3600\.\ds in the future/);
+        assert.match(error.hint, /clock has moved backwards/);
+        return true;
+      });
+    }));
+
+  it('tolerates the small skew a network filesystem can produce', () =>
+    withRecordings(async ({ dir, claim }) => {
+      await writeRecording(dir, 'handy-slightly-ahead.wav', { ageSec: -2 });
+      assert.ok((await claim()).path.endsWith('handy-slightly-ahead.wav'));
     }));
 });
 
@@ -198,6 +221,44 @@ describe('guard: deduplication', () => {
       const next = await writeRecording(dir, 'handy-2.wav', { ageSec: 0 });
       assert.equal((await claim()).path, next);
     }));
+
+  it('still refuses an earlier recording after a later one disappears', () =>
+    withRecordings(async ({ dir, claim }) => {
+      // Remembering only the last claim leaves this gap: claim A, then claim B,
+      // then let B vanish — retention removing it, or the next recording never
+      // being written — and A is the newest file on disk again while the store
+      // only remembers B. A would go out a second time and the earlier
+      // dictation's words would land in the current one.
+      const a = await writeRecording(dir, 'handy-a.wav', { ageSec: 2 });
+      assert.equal((await claim()).path, a);
+
+      const b = await writeRecording(dir, 'handy-b.wav', { ageSec: 0 });
+      assert.equal((await claim()).path, b);
+
+      await unlink(b);
+
+      await assert.rejects(claim(), (error) => {
+        assert.equal(error.status, 409);
+        assert.match(error.message, /already sent for transcription/);
+        return true;
+      });
+    }));
+
+  it('forgets claims once their recording is too old to be picked again', () => {
+    // The set is bounded by the dictation window rather than by the session: a
+    // recording older than MAX_AGE_SEC is already refused on freshness, so
+    // remembering it buys nothing and would grow without limit.
+    let clock = 1_000_000;
+    const store = createDedupeStore({ maxAgeMs: 60_000, now: () => clock });
+
+    store.remember({ path: '/r/handy-1.wav', mtimeMs: clock - 1_000, at: clock });
+    assert.equal(store.isSame('/r/handy-1.wav', clock - 1_000), true);
+    assert.equal(store.size, 1);
+
+    clock += 120_000;
+    assert.equal(store.isSame('/r/handy-1.wav', clock - 121_000), false);
+    assert.equal(store.size, 0);
+  });
 });
 
 describe('guard: not a wav at all', () => {

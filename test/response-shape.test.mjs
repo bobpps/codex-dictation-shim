@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   chatCompletionEnvelope,
   draftFromRequest,
+  hostForUrl,
   isLoopback,
   normalizeRoute,
   transcriptionFieldFromRequest,
@@ -131,5 +132,26 @@ describe('loopback detection', () => {
     for (const host of ['0.0.0.0', '::', '192.168.1.10', '10.0.0.1', 'example.local', '127.0.0.1.evil.com']) {
       assert.equal(isLoopback(host), false, `${host} should not be loopback`);
     }
+  });
+});
+
+describe('host formatting for URLs', () => {
+  it('brackets an IPv6 literal, because otherwise it is not a URL', () => {
+    // `SHIM_HOST=::1` is accepted and listened on, but `http://::1:8756/v1`
+    // does not parse — so it is not something Handy could be given as a base
+    // URL, and the startup line would be advice that cannot be followed.
+    assert.equal(hostForUrl('::1'), '[::1]');
+    assert.equal(hostForUrl('fe80::1'), '[fe80::1]');
+    assert.throws(() => new URL('http://::1:8756/v1'));
+    assert.doesNotThrow(() => new URL(`http://${hostForUrl('::1')}:8756/v1`));
+  });
+
+  it('leaves a host that is already bracketed alone', () => {
+    assert.equal(hostForUrl('[::1]'), '[::1]');
+  });
+
+  it('leaves IPv4 and names untouched', () => {
+    assert.equal(hostForUrl('127.0.0.1'), '127.0.0.1');
+    assert.equal(hostForUrl('localhost'), 'localhost');
   });
 });

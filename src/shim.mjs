@@ -170,7 +170,9 @@ export async function createApp({ config, logger }) {
     });
   }
 
-  const dedupe = createDedupeStore();
+  // Remembers a whole dictation window of claims, not just the last one: see
+  // createDedupeStore for what only remembering the last one lets through.
+  const dedupe = createDedupeStore({ maxAgeMs: config.maxAgeSec * 1000 });
   const keepalive = createKeepalive({ config, logger });
   const startedAtMs = Date.now();
 
@@ -189,7 +191,7 @@ export async function createApp({ config, logger }) {
       status: ok ? 'ok' : 'degraded',
       version: VERSION,
       uptimeSec: Math.floor((Date.now() - startedAtMs) / 1000),
-      listen: `http://${config.host}:${config.port}`,
+      listen: `http://${hostForUrl(config.host)}:${config.port}`,
       recordings: { ...dir, via: recordings.source },
       auth,
       codex: {
@@ -401,6 +403,17 @@ function baseName(path) {
   return parts[parts.length - 1];
 }
 
+/**
+ * Format a host for a URL. An IPv6 literal needs brackets or the result is not
+ * a URL at all: `http://::1:8756/v1` fails `new URL()`, and Handy would refuse
+ * it as a base URL — while `SHIM_HOST=::1` is a value this shim accepts and
+ * listens on happily. The bare value still goes to `server.listen`, which wants
+ * it unbracketed.
+ */
+export function hostForUrl(host) {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
+
 export function isLoopback(host) {
   const bare = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
   return bare === 'localhost' || bare === '::1' || /^127\.\d+\.\d+\.\d+$/.test(bare);
@@ -420,8 +433,8 @@ async function main() {
   const app = await createApp({ config, logger });
   await app.listen();
   logger.info('listening', {
-    url: `http://${config.host}:${config.port}`,
-    handyBaseUrl: `http://${config.host}:${config.port}/v1`,
+    url: `http://${hostForUrl(config.host)}:${config.port}`,
+    handyBaseUrl: `http://${hostForUrl(config.host)}:${config.port}/v1`,
   });
 
   app.keepalive.start();
