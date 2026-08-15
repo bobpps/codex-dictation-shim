@@ -261,9 +261,13 @@ src/
   config.mjs       environment and .env parsing, strict about bad values
   log.mjs          logging, with transcripts redacted by default
   errors.mjs       one error type, carrying the status Handy will see
-test/              node --test; no mocks of fetch, real servers throughout
+test/              node --test; real HTTP servers and real directories, not
+                   mocks of fetch or fs. The one injected dependency is the
+                   child process the keepalive spawns.
 service/           launchd, systemd --user, Task Scheduler
 scripts/probe.mjs  verification step 01, as a command
+.github/           CI: tests on Node 18.17 through 24, plus guards against a
+                   tracked .env, auth.json, log, or recording
 ```
 
 Handy sources this was built against: [`cjpais/Handy`](https://github.com/cjpais/Handy), branch

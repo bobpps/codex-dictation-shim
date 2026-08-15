@@ -54,6 +54,11 @@ CI. Keep both lists in agreement when you change either.
 
 `node --test`. The suite stands up real HTTP servers and real temporary directories instead of
 mocking `fetch` or `fs` — what goes over the wire is the thing worth asserting on. Keep it that way.
+The single injected dependency is the child process the keepalive spawns, because spawning the real
+`codex` binary in a test would depend on a login this repository must never assume.
+
+Fixtures are created and removed inside the test that uses them, not in file-level `before` hooks:
+those only became reliable in Node 20, and this project supports 18.17.
 
 Four things cannot be tested here and must not be claimed as verified: the real endpoint's response
 shape, its audio-length limit, whether `codex login status` refreshes the token, and anything
