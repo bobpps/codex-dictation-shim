@@ -113,7 +113,15 @@ export async function startFakeTranscribe(respond = () => ({ status: 200, body: 
       requests.push(recorded);
 
       const reply = (await respond(recorded, requests.length)) ?? { status: 200, body: {} };
-      if (reply.hang) return; // never answers: exercises the timeout path
+      if (reply.hang) return; // never answers at all: no headers, no body
+
+      // Headers now, body never. `fetch` resolves on headers, so this is the
+      // shape that hangs a client whose deadline stops at the headers.
+      if (reply.stallBody) {
+        res.writeHead(reply.status ?? 200, { 'content-type': 'application/json' });
+        res.write('{"te');
+        return;
+      }
 
       const payload = typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body);
       res.writeHead(reply.status ?? 200, {

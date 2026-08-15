@@ -237,6 +237,30 @@ describe('when the endpoint refuses', () => {
     });
   });
 
+  it('times out on a response that starts and then stalls', async () => {
+    // The nastier shape, and the one that used to hang forever: `fetch`
+    // resolves as soon as headers arrive, so a deadline that stops there leaves
+    // the body read unbounded. Handy sets no client timeout of its own, so the
+    // dictation would never finish — not even by falling back to the draft,
+    // which is the one guarantee this whole design rests on.
+    await withServer(() => ({ stallBody: true }), async (server) => {
+      const startedAt = Date.now();
+
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url, timeoutMs: 120 }),
+        (error) => {
+          assert.equal(error.status, 504);
+          assert.equal(error.code, 'codex_timeout');
+          assert.match(error.message, /did not finish its body/);
+          return true;
+        },
+      );
+
+      // The deadline has to actually bound it, not merely be reported later.
+      assert.ok(Date.now() - startedAt < 2000, 'the request must end near its deadline');
+    });
+  });
+
   it('reports an unreachable endpoint as such', async () => {
     const server = await startFakeTranscribe();
     const url = server.url;

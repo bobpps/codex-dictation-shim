@@ -112,6 +112,15 @@ export async function transcribe({
   // Content-Type is left to fetch, which is the only party that knows the
   // multipart boundary it just generated.
 
+  // The deadline covers the whole exchange, not just the headers.
+  //
+  // `fetch` resolves as soon as response headers arrive, so clearing the timer
+  // at that point leaves the body read with no deadline at all: an endpoint that
+  // sends headers and then stalls would hang this request forever. That is worse
+  // than a slow transcription — Handy sets no client timeout of its own
+  // (`create_client` in llm_client.rs), so the dictation would never finish, not
+  // even by falling back to the local draft. The whole safety net depends on
+  // this request always ending.
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -120,92 +129,111 @@ export async function transcribe({
   }, timeoutMs);
 
   const startedAt = now();
-  let response;
   try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: form,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (timedOut) {
-      throw upstreamTimeoutError(
-        `Codex transcribe did not answer within ${timeoutMs}ms.`,
-        'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
-      );
-    }
-    // `error.message` is never used here. Measured behaviour of Node's fetch:
-    // a transport failure is the generic `fetch failed` with the real reason on
-    // `error.cause`, while a failure to *build* the request quotes the offending
-    // argument — and one of those arguments is `Authorization: Bearer <token>`.
-    // Taking the detail only from `cause` keeps the useful half and drops the
-    // half that can carry credentials.
-    const cause = error?.cause;
-    if (cause === null || cause === undefined) {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: form,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (timedOut) {
+        throw upstreamTimeoutError(
+          `Codex transcribe did not answer within ${timeoutMs}ms.`,
+          'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
+        );
+      }
+      // `error.message` is never used here. Measured behaviour of Node's fetch:
+      // a transport failure is the generic `fetch failed` with the real reason
+      // on `error.cause`, while a failure to *build* the request quotes the
+      // offending argument — and one of those arguments is
+      // `Authorization: Bearer <token>`. Taking the detail only from `cause`
+      // keeps the useful half and drops the half that can carry credentials.
+      const cause = error?.cause;
+      if (cause === null || cause === undefined) {
+        throw upstreamError(
+          `Cannot reach ${url}: the request could not be built (${error?.name ?? 'Error'}).`,
+          'Details are withheld because this error quotes its arguments, one of which is the access token. ' +
+            'A corrupted auth.json is the usual cause; run `codex login`.',
+        );
+      }
       throw upstreamError(
-        `Cannot reach ${url}: the request could not be built (${error?.name ?? 'Error'}).`,
-        'Details are withheld because this error quotes its arguments, one of which is the access token. ' +
-          'A corrupted auth.json is the usual cause; run `codex login`.',
+        `Cannot reach ${url}: ${cause.code ?? cause.message ?? String(cause)}`,
+        'Check network access to the endpoint from this machine.',
       );
     }
-    throw upstreamError(
-      `Cannot reach ${url}: ${cause.code ?? cause.message ?? String(cause)}`,
-      'Check network access to the endpoint from this machine.',
-    );
+
+    const requestId = response.headers?.get?.('x-request-id') ?? null;
+    const contentType = response.headers?.get?.('content-type') ?? null;
+
+    let raw;
+    try {
+      raw = await response.text();
+    } catch (error) {
+      if (timedOut) {
+        throw upstreamTimeoutError(
+          `Codex transcribe sent headers but did not finish its body within ${timeoutMs}ms.`,
+          'The deadline covers the whole response, so Handy still gets an answer and falls back to the local transcript.',
+        );
+      }
+      throw upstreamError(
+        `Codex transcribe sent ${response.status} but its body could not be read (${error?.code ?? error?.name ?? 'Error'}).`,
+        'The connection dropped part-way through the response.',
+      );
+    }
+
+    const elapsedMs = now() - startedAt;
+
+    if (!response.ok) {
+      throw upstreamError(
+        `Codex transcribe returned ${response.status} — ${describeBody(raw, contentType, revealBodies)}`,
+        describeUpstreamStatus(response.status),
+      );
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      // The parser's own message is deliberately dropped rather than quoted:
+      // `JSON.parse` reports failures as `Unexpected token 's', "something "…`,
+      // quoting the start of its input. If that input is a plain-text
+      // transcript, the message carries the first words of it straight past the
+      // redaction above.
+      throw upstreamError(
+        `Codex transcribe returned ${response.status} with a body that is not JSON.`,
+        `Received ${describeBody(raw, contentType, revealBodies)}`,
+      );
+    }
+
+    const text = extractText(payload);
+    if (text === null) {
+      // The response shape is one of the facts this plan could only verify on a
+      // machine with network access to the endpoint, so when it does not match,
+      // the error names the keys that did arrive. That turns "it broke" into a
+      // one-line fix in this file.
+      const keys =
+        payload !== null && typeof payload === 'object'
+          ? Object.keys(payload).join(', ')
+          : typeof payload;
+      throw upstreamError(
+        `Codex transcribe returned no transcript. Tried ${TEXT_FIELDS.join('/')}; response keys: ${keys}.`,
+        'The endpoint is undocumented and may have changed its response shape.',
+      );
+    }
+    if (text.trim() === '') {
+      throw upstreamError(
+        'Codex transcribe returned an empty transcript.',
+        'Falling back keeps the local draft rather than pasting nothing.',
+      );
+    }
+
+    return { text, status: response.status, requestId, elapsedMs };
   } finally {
     clearTimeout(timer);
   }
-
-  const elapsedMs = now() - startedAt;
-  const requestId = response.headers?.get?.('x-request-id') ?? null;
-  const contentType = response.headers?.get?.('content-type') ?? null;
-
-  if (!response.ok) {
-    const body = await readBodySafely(response);
-    throw upstreamError(
-      `Codex transcribe returned ${response.status} — ${describeBody(body, contentType, revealBodies)}`,
-      describeUpstreamStatus(response.status),
-    );
-  }
-
-  const raw = await readBodySafely(response);
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    // The parser's own message is deliberately dropped rather than quoted:
-    // `JSON.parse` reports failures as `Unexpected token 's', "something "...`,
-    // quoting the start of its input. If that input is a plain-text transcript,
-    // the message carries the first words of it straight past the redaction
-    // above.
-    throw upstreamError(
-      `Codex transcribe returned ${response.status} with a body that is not JSON.`,
-      `Received ${describeBody(raw, contentType, revealBodies)}`,
-    );
-  }
-
-  const text = extractText(payload);
-  if (text === null) {
-    // The response shape is one of the facts this plan could only verify on a
-    // machine with network access to the endpoint, so when it does not match,
-    // the error names the keys that did arrive. That turns "it broke" into a
-    // one-line fix in this file.
-    const keys =
-      payload !== null && typeof payload === 'object' ? Object.keys(payload).join(', ') : typeof payload;
-    throw upstreamError(
-      `Codex transcribe returned no transcript. Tried ${TEXT_FIELDS.join('/')}; response keys: ${keys}.`,
-      'The endpoint is undocumented and may have changed its response shape.',
-    );
-  }
-  if (text.trim() === '') {
-    throw upstreamError(
-      'Codex transcribe returned an empty transcript.',
-      'Falling back keeps the local draft rather than pasting nothing.',
-    );
-  }
-
-  return { text, status: response.status, requestId, elapsedMs };
 }
 
 function extractText(payload) {
@@ -214,14 +242,6 @@ function extractText(payload) {
     if (typeof payload[field] === 'string') return payload[field];
   }
   return null;
-}
-
-async function readBodySafely(response) {
-  try {
-    return await response.text();
-  } catch (error) {
-    return `<body could not be read: ${error.message}>`;
-  }
 }
 
 function truncate(text, limit) {
