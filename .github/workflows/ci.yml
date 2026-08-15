@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# This workflow reads the repository and runs its tests. It holds no secret and
+# needs none: the test suite stands up its own HTTP server in place of the Codex
+# endpoint and writes its own `auth.json` fixtures into a temporary directory,
+# so nothing here ever touches a real account.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests on Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is the version `engines` claims, so the claim is tested
+        # rather than asserted. The rest is what people actually run.
+        node: ['18.17.0', '20.x', '22.x', '24.x']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No `npm ci`: the shim has no dependencies and no lockfile, which is the
+      # property that lets it run anywhere Node is without a build step.
+      - name: Refuse an accidental dependency
+        run: |
+          if [ -d node_modules ] || [ -f package-lock.json ]; then
+            echo "This project is meant to have no dependencies."
+            exit 1
+          fi
+
+      - run: node --test
+
+  guards:
+    name: Nothing private is tracked
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The second line behind .gitignore, and it has to cover the same set. A
+      # `git add -f .env` or a copy of auth.json made during a drill is exactly
+      # what this exists to catch — both would publish live credentials, and the
+      # WAV rule exists because recordings are dictated speech.
+      - name: Refuse tracked secrets, recordings, and logs
+        run: |
+          tracked=$(git ls-files -- \
+            '.env' '.env.*' ':(exclude).env.example' \
+            'auth.json' '**/auth.json' \
+            '*.log' \
+            '*.wav' ':(exclude)test/fixtures/*.wav')
+          if [ -n "$tracked" ]; then
+            echo "These files must never be committed:"
+            echo "$tracked"
+            exit 1
+          fi
