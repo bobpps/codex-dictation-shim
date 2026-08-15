@@ -105,6 +105,11 @@ describe('rejected values', () => {
     ['CODEX_TRANSCRIBE_URL', 'not-a-url', /absolute URL/],
     ['CODEX_TRANSCRIBE_URL', 'ftp://example.com', /http or https/],
     ['KEEPALIVE_INTERVAL_HOURS', '0', /between 1 and 168/],
+    // Zero would satisfy the quiet window on the very first stat, which is the
+    // still-being-written guard switched off through a setting. A guard the
+    // plan calls non-optional must not have an off switch.
+    ['SETTLE_QUIET_MS', '0', /between 1 and 60000/],
+    ['SETTLE_TIMEOUT_MS', '0', /between 1 and 120000/],
   ];
 
   for (const [key, value, expected] of cases) {

@@ -147,8 +147,13 @@ export function loadConfig(env = process.env, { dotEnvPath = null } = {}) {
     throw new Error(`SHIM_LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}, got "${logLevel}".`);
   }
 
-  const settleQuietMs = readInteger(source, 'SETTLE_QUIET_MS', { min: 0, max: 60_000 });
-  const settleTimeoutMs = readInteger(source, 'SETTLE_TIMEOUT_MS', { min: 0, max: 120_000 });
+  // The floor is 1, not 0. At zero the quiet window is satisfied by the very
+  // first stat — `now - mtime >= 0` is true for any file — so a WAV still being
+  // written would be accepted immediately and sent truncated. That is the
+  // still-being-written guard switched off through a setting, and the guard is
+  // not optional.
+  const settleQuietMs = readInteger(source, 'SETTLE_QUIET_MS', { min: 1, max: 60_000 });
+  const settleTimeoutMs = readInteger(source, 'SETTLE_TIMEOUT_MS', { min: 1, max: 120_000 });
   if (settleTimeoutMs < settleQuietMs) {
     throw new Error(
       `SETTLE_TIMEOUT_MS (${settleTimeoutMs}) is below SETTLE_QUIET_MS (${settleQuietMs}), so a ` +
