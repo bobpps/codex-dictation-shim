@@ -36,10 +36,24 @@ jobs:
 
       # No `npm ci`: the shim has no dependencies and no lockfile, which is the
       # property that lets it run anywhere Node is without a build step.
+      #
+      # Checked over tracked files rather than the working tree, and over every
+      # package manager rather than npm alone: a nested `tools/node_modules`, a
+      # `yarn.lock`, or a `pnpm-lock.yaml` is exactly as much of a dependency as
+      # a root `package-lock.json`, and a root-only test would not see any of
+      # them. Naming the offending files also beats a bare "there is a problem".
       - name: Refuse an accidental dependency
         run: |
-          if [ -d node_modules ] || [ -f package-lock.json ]; then
-            echo "This project is meant to have no dependencies."
+          tracked=$(git ls-files -- \
+            'node_modules/*' '**/node_modules/*' \
+            'package-lock.json' '**/package-lock.json' \
+            'npm-shrinkwrap.json' '**/npm-shrinkwrap.json' \
+            'yarn.lock' '**/yarn.lock' \
+            'pnpm-lock.yaml' '**/pnpm-lock.yaml' \
+            'bun.lockb' '**/bun.lockb')
+          if [ -n "$tracked" ]; then
+            echo "This project is meant to have no dependencies, but these are tracked:"
+            echo "$tracked"
             exit 1
           fi
 
