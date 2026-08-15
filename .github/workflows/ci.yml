@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# This workflow reads the repository and runs its tests. It holds no secret and
+# needs none: the test suite stands up its own HTTP server in place of the Codex
+# endpoint and writes its own `auth.json` fixtures into a temporary directory,
+# so nothing here ever touches a real account.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests on Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is the version `engines` claims, so the claim is tested
+        # rather than asserted. The rest is what people actually run.
+        node: ['18.17.0', '20.x', '22.x', '24.x']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No `npm ci`: the shim has no dependencies and no lockfile, which is the
+      # property that lets it run anywhere Node is without a build step.
+      #
+      # Checked over tracked files rather than the working tree, and over every
+      # package manager rather than npm alone: a nested `tools/node_modules`, a
+      # `yarn.lock`, or a `pnpm-lock.yaml` is exactly as much of a dependency as
+      # a root `package-lock.json`, and a root-only test would not see any of
+      # them. Naming the offending files also beats a bare "there is a problem".
+      - name: Refuse an accidental dependency
+        run: |
+          tracked=$(git ls-files -- \
+            'node_modules/*' '**/node_modules/*' \
+            'package-lock.json' '**/package-lock.json' \
+            'npm-shrinkwrap.json' '**/npm-shrinkwrap.json' \
+            'yarn.lock' '**/yarn.lock' \
+            'pnpm-lock.yaml' '**/pnpm-lock.yaml' \
+            'bun.lock' '**/bun.lock' \
+            'bun.lockb' '**/bun.lockb')
+          if [ -n "$tracked" ]; then
+            echo "This project is meant to have no dependencies, but these are tracked:"
+            echo "$tracked"
+            exit 1
+          fi
+
+      - run: node --test
+
+  guards:
+    name: Nothing private is tracked
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The second line behind .gitignore, and it asks .gitignore itself rather
+      # than restating it. `git check-ignore --no-index` answers "would this
+      # tracked file have been ignored", so the rule enforced here is exactly
+      # "nothing matching .gitignore may be tracked" — including its negations,
+      # which is why `.env.example` and `test/fixtures/sample.wav` stay allowed.
+      #
+      # A restated list was tried first and drifted three times: `logs/` was
+      # missed because only `*.log` was listed, and `.env` was missed at any
+      # depth because a pathspec without a wildcard matches only the root, while
+      # `*.log` and `*.wav` happen to match nested paths since a pathspec `*`
+      # also matches `/`. Half right, and unreadably so. A list that has to be
+      # kept in step with another list will fall out of step.
+      #
+      # This catches a `git add -f .env` or a copy of auth.json made during a
+      # drill — both publish live credentials — and any recording or log, which
+      # hold dictated speech.
+      - name: Refuse tracked files that .gitignore excludes
+        run: |
+          # Self-test first: a guard that silently stops working is worse than
+          # no guard, and this one would go quiet if check-ignore ever changed
+          # its interface or stopped seeing .gitignore.
+          if [ "$(printf '.env' | git check-ignore --no-index --stdin)" != ".env" ]; then
+            echo "The guard itself is broken: git check-ignore does not report .env as ignored."
+            exit 1
+          fi
+
+          tracked=$(git ls-files -z | git check-ignore --no-index --stdin -z | tr '\0' '\n' || true)
+          if [ -n "$tracked" ]; then
+            echo "These files match .gitignore and must never be committed:"
+            echo "$tracked"
+            exit 1
+          fi
+
+      # A source file that git treats as binary hides itself from review. One
+      # stray NUL byte — a `\0` written as the byte instead of the escape — was
+      # enough to make git report `src/recording.mjs` as `Bin 7841 -> 10549
+      # bytes`, so a commit rewriting the recording-selection logic showed no
+      # diff at all. The reviewer caught it by reading the file; nobody reading
+      # the diff could have.
+      #
+      # Git's own notion of binary is the test, via a diff against the empty
+      # tree: `-` in both numstat columns means binary. The WAV fixture is the
+      # one file that is legitimately so.
+      - name: Refuse a source file that git cannot diff
+        run: |
+          binary=$(git diff --numstat "$(git hash-object -t tree /dev/null)" HEAD \
+            | awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' \
+            | grep -v '^test/fixtures/.*\.wav$' || true)
+          if [ -n "$binary" ]; then
+            echo "git treats these tracked files as binary, so their changes never appear in a diff:"
+            echo "$binary"
+            echo "A stray NUL byte in a source file is the usual cause; write \\0 as an escape."
+            exit 1
+          fi

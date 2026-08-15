@@ -1,0 +1,29 @@
+# Machine-local configuration. `.env` carries the path to the Codex credentials
+# and the header overrides used to impersonate the desktop client; neither
+# belongs in a repository. `.env.example` is the one file here that is meant to
+# be read by other people.
+.env
+.env.*
+!.env.example
+
+# Logs quote dictated speech verbatim, because that is the whole point of the
+# thing being logged. Treat them like private correspondence, not like build
+# output.
+*.log
+logs/
+
+# Recordings are dictated speech too. The single exception is the synthetic
+# fixture the tests need, which is a generated sine tone and contains no speech.
+*.wav
+!test/fixtures/*.wav
+
+# `auth.json` holds a live access token and a refresh token for the ChatGPT
+# account. It is read from `~/.codex`, never copied into the working tree — and
+# if a copy is ever made for a drill, git must refuse to see it.
+auth.json
+
+node_modules/
+npm-debug.log*
+
+.DS_Store
+Thumbs.db

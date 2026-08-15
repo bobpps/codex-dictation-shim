@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent (macOS).
+
+    install: cp service/com.local.codex-dictation-shim.plist ~/Library/LaunchAgents/
+             launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.codex-dictation-shim.plist
+    logs:    tail -f ~/Library/Logs/codex-dictation-shim.log
+    check:   curl -s localhost:8756/health | jq
+    remove:  launchctl bootout gui/$(id -u)/com.local.codex-dictation-shim
+
+  Replace /Users/YOU with the real home directory: launchd does not expand ~ or
+  $HOME in these paths. Confirm the node path with `which node` — Homebrew on
+  Apple silicon puts it in /opt/homebrew/bin.
+
+  launchd starts agents with a minimal PATH, which is why PATH and CODEX_CLI_BIN
+  are set explicitly. Without them the daily `codex login status` keepalive
+  fails to find its own binary, and the token quietly expires ten days later.
+
+  The log file is written by this process and inherits its umask. Transcripts
+  are redacted unless SHIM_LOG_TRANSCRIPTS=1, but the log still names files and
+  timings: `chmod 600` it and treat it as private.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.codex-dictation-shim</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/YOU/src/codex-dictation-shim/src/shim.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/src/codex-dictation-shim</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>CODEX_CLI_BIN</key>
+    <string>/opt/homebrew/bin/codex</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/Library/Logs/codex-dictation-shim.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/Library/Logs/codex-dictation-shim.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

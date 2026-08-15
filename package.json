@@ -1,0 +1,19 @@
+{
+  "name": "codex-dictation-shim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local OpenAI-compatible endpoint that swaps Handy's local transcript for Codex dictation, without patching Handy",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "bin": {
+    "codex-dictation-shim": "src/shim.mjs"
+  },
+  "scripts": {
+    "start": "node src/shim.mjs",
+    "test": "node --test",
+    "probe": "node scripts/probe.mjs"
+  }
+}

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windows Task Scheduler definition.
+
+  Install with PowerShell, which takes the definition as a string and so does
+  not care how the file is encoded:
+
+    $xml = Get-Content .\service\task-scheduler.xml -Raw
+    Register-ScheduledTask -TaskName "Codex Dictation Shim" -Xml $xml
+
+    start:  Start-ScheduledTask -TaskName "Codex Dictation Shim"
+    check:  curl.exe -s localhost:8756/health
+    remove: Unregister-ScheduledTask -TaskName "Codex Dictation Shim" -Confirm:$false
+
+  `schtasks /Create /XML` works too, but it has historically wanted the file in
+  UTF-16 and answers "The task XML is malformed" otherwise. This file is UTF-8,
+  and the declaration says so — declaring UTF-16 over single-byte content makes
+  every XML parser reject it on line 1, which is worse than either choice. If
+  schtasks refuses it on your machine, convert first:
+
+    Get-Content .\service\task-scheduler.xml | Out-File -Encoding Unicode .\task.xml
+    schtasks /Create /TN "Codex Dictation Shim" /XML .\task.xml
+
+  Replace YOU in the three paths below, and confirm the node path with
+  `where node`.
+
+  Two settings are load-bearing rather than boilerplate:
+
+  - `ExecutionTimeLimit` is PT0S, meaning no limit. The default is three days,
+    after which Task Scheduler would kill a perfectly healthy shim and the next
+    dictation would quietly fall back to the local transcript.
+  - `RestartOnFailure` covers a crash; `DisallowStartIfOnBatteries` is off
+    because a laptop on battery is exactly when someone dictates.
+
+  Task Scheduler starts the process with the machine PATH, not the one from
+  your shell profile, so CODEX_CLI_BIN is set through the `.env` file rather
+  than assumed. There is no environment block in this format.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Local OpenAI-compatible endpoint that swaps Handy's local transcript for Codex dictation.</Description>
+    <URI>\Codex Dictation Shim</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\Program Files\nodejs\node.exe</Command>
+      <Arguments>C:\Users\YOU\src\codex-dictation-shim\src\shim.mjs</Arguments>
+      <WorkingDirectory>C:\Users\YOU\src\codex-dictation-shim</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

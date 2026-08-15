@@ -1,0 +1,56 @@
+# systemd --user unit (Linux).
+#
+#   install: cp service/codex-dictation-shim.service ~/.config/systemd/user/
+#            systemctl --user daemon-reload
+#            systemctl --user enable --now codex-dictation-shim
+#   logs:    journalctl --user -u codex-dictation-shim -f
+#   check:   curl -s localhost:8756/health | jq
+#
+# Edit the two absolute paths below. A user unit starts with a minimal PATH, so
+# `node` and `codex` are named in full rather than looked up — an unqualified
+# `codex` is the usual reason the token keepalive silently never runs.
+#
+# `systemctl --user` services stop when the last session for the user ends,
+# unless lingering is enabled: `sudo loginctl enable-linger $USER`. Without it
+# the shim is down exactly when you come back to the machine and dictate.
+
+[Unit]
+Description=Codex dictation shim for Handy
+Documentation=https://github.com/bobpps/codex-dictation-shim
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/codex-dictation-shim
+ExecStart=/usr/bin/node %h/src/codex-dictation-shim/src/shim.mjs
+
+Environment=CODEX_CLI_BIN=%h/.local/bin/codex
+# Anything set here overrides the repository's .env, which is what makes the
+# .env file safe to keep for local experiments.
+# Environment=SHIM_LOG_LEVEL=debug
+
+Restart=always
+RestartSec=5s
+
+# The shim reads Handy's recordings and ~/.codex and talks to one host; it
+# writes nothing itself. The one exception is deliberate: the keepalive runs
+# `codex login status`, and refreshing a token means rewriting auth.json — so
+# ~/.codex has to stay writable or the keepalive would fail at the only thing it
+# exists to do.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.codex
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Transcripts are redacted from logs by default (SHIM_LOG_TRANSCRIPTS=0). If you
+# ever turn that on, remember the journal keeps what it is given.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codex-dictation-shim
+
+[Install]
+WantedBy=default.target
