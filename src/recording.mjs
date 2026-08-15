@@ -198,6 +198,10 @@ export async function claimRecording({
 
   // Guard 3. Compared against the settled mtime, so a re-recorded file at the
   // same path counts as a new recording, which is what it is.
+  //
+  // The check and the claim below are one synchronous block with no `await`
+  // between them, so two overlapping requests cannot both pass it: the second
+  // one runs after the first has already recorded its claim.
   if (dedupe.isSame(claim.path, claim.mtimeMs)) {
     throw guardError(
       `${claim.path} was already sent for transcription.`,

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   chatCompletionEnvelope,
   draftFromRequest,
+  isLoopback,
   normalizeRoute,
   transcriptionFieldFromRequest,
 } from '../src/shim.mjs';
@@ -113,5 +114,22 @@ describe('route normalization', () => {
 
   it('does not mistake a longer segment for the /v1 prefix', () => {
     assert.equal(normalizeRoute('/v1beta/chat/completions'), '/v1beta/chat/completions');
+  });
+});
+
+describe('loopback detection', () => {
+  // The endpoint has no authentication, so binding it wider hands the newest
+  // transcript to anyone who can reach the port. Getting this wrong in the
+  // permissive direction is the expensive mistake.
+  it('recognises every way of naming this machine', () => {
+    for (const host of ['127.0.0.1', '127.1.2.3', 'localhost', 'LOCALHOST', '::1', '[::1]', ' 127.0.0.1 ']) {
+      assert.equal(isLoopback(host), true, `${host} should be loopback`);
+    }
+  });
+
+  it('treats anything else as reachable from elsewhere', () => {
+    for (const host of ['0.0.0.0', '::', '192.168.1.10', '10.0.0.1', 'example.local', '127.0.0.1.evil.com']) {
+      assert.equal(isLoopback(host), false, `${host} should not be loopback`);
+    }
   });
 });

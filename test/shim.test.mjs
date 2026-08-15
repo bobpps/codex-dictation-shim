@@ -313,6 +313,59 @@ describe('privacy of the log', () => {
   });
 });
 
+describe('binding beyond localhost', () => {
+  /** Build the app without listening — the warning is emitted at construction. */
+  async function buildWith(host) {
+    const recordingsDir = await makeTempDir('shim-bind-rec-');
+    const codexHome = await makeTempDir('shim-bind-codex-');
+    await writeAuthFile(codexHome);
+
+    const config = loadConfig(
+      {
+        SHIM_HOST: host,
+        SHIM_PORT: '0',
+        HANDY_RECORDINGS_DIR: recordingsDir,
+        CODEX_HOME: codexHome,
+        KEEPALIVE_ENABLED: '0',
+      },
+      { dotEnvPath: null },
+    );
+    const logger = recordingLogger();
+    const app = await createApp({ config, logger });
+    return {
+      logger,
+      async cleanup() {
+        await app.close();
+        await removeDir(recordingsDir);
+        await removeDir(codexHome);
+      },
+    };
+  }
+
+  it('warns that the endpoint has no authentication', async () => {
+    // Handy's API key is ignored on purpose, so off loopback anyone who can
+    // reach the port can read the newest transcript.
+    const { logger, cleanup } = await buildWith('0.0.0.0');
+    try {
+      const warning = logger.lines.find((line) => line.message.includes('listening beyond localhost'));
+      assert.ok(warning, 'binding 0.0.0.0 must be called out');
+      assert.equal(warning.level, 'warn');
+      assert.match(warning.fields.detail, /requires no credentials/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('says nothing for the default loopback bind', async () => {
+    const { logger, cleanup } = await buildWith('127.0.0.1');
+    try {
+      assert.equal(logger.has('warn', 'listening beyond localhost'), false);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe('diagnostics', () => {
   it('reports a healthy shim in one curl', async () => {
     await withShim({ recordings: [{ name: 'handy-1.wav', ageSec: 1 }] }, async ({ call, complete }) => {

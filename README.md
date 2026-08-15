@@ -242,6 +242,10 @@ curl -s localhost:8756/v1/chat/completions \
 - **Logs quote dictated speech** if you turn `SHIM_LOG_TRANSCRIPTS` on, and so does
   `probe.mjs --reveal`. They are private correspondence, not build output. The same goes for
   anything pasted into an issue.
+- **The endpoint has no authentication.** Handy's API key is ignored, because Handy sends whatever
+  string it is given and checking it would prove nothing. That is fine on loopback and not fine
+  anywhere else: off `127.0.0.1`, anyone who can reach the port can ask for the transcript of the
+  newest recording. The shim warns at startup if `SHIM_HOST` is not a loopback address.
 - **The idle Whisper pass never goes away.** It is a property of the design.
 
 ## Layout

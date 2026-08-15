@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,6 +155,20 @@ export async function createApp({ config, logger }) {
     path: recordings.path,
     via: recordings.source,
   });
+
+  // This endpoint has no authentication. Handy's API key is ignored on purpose
+  // — Handy sends whatever string it is given, so checking it would prove
+  // nothing — and off the loopback interface that means anyone who can reach
+  // the port can ask for the transcript of whatever was just dictated. Someone
+  // may have a reason to bind wider; nobody should do it by accident.
+  if (!isLoopback(config.host)) {
+    logger.warn('listening beyond localhost', {
+      host: config.host,
+      detail:
+        'This endpoint requires no credentials and returns the transcript of the newest recording. ' +
+        'Anyone who can reach this port can read what was just dictated.',
+    });
+  }
 
   const dedupe = createDedupeStore();
   const keepalive = createKeepalive({ config, logger });
@@ -381,6 +396,11 @@ function baseName(path) {
   return parts[parts.length - 1];
 }
 
+export function isLoopback(host) {
+  const bare = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  return bare === 'localhost' || bare === '::1' || /^127\.\d+\.\d+\.\d+$/.test(bare);
+}
+
 async function main() {
   const here = dirname(fileURLToPath(import.meta.url));
   const config = loadConfig(process.env, { dotEnvPath: join(here, '..', '.env') });
@@ -398,6 +418,7 @@ async function main() {
     url: `http://${config.host}:${config.port}`,
     handyBaseUrl: `http://${config.host}:${config.port}/v1`,
   });
+
   app.keepalive.start();
 
   const shutdown = (signal) => {
@@ -425,7 +446,25 @@ async function main() {
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/**
+ * True when this file was started as the program, rather than imported.
+ *
+ * Compared through `realpathSync` because `package.json` declares a `bin`:
+ * installed that way, `process.argv[1]` is the symlink the package manager
+ * created, and a plain string comparison against this module's own path would
+ * be false — the process would start, define everything, and exit without ever
+ * listening.
+ */
+function startedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return fileURLToPath(import.meta.url) === process.argv[1];
+  }
+}
+
+if (startedDirectly()) {
   main().catch((error) => {
     const detail = error instanceof ShimError ? error.detail : error.message;
     console.error(`${new Date().toISOString()} FATAL ${detail}`);
