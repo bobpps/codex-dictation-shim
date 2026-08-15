@@ -99,3 +99,25 @@ jobs:
             echo "$tracked"
             exit 1
           fi
+
+      # A source file that git treats as binary hides itself from review. One
+      # stray NUL byte — a `\0` written as the byte instead of the escape — was
+      # enough to make git report `src/recording.mjs` as `Bin 7841 -> 10549
+      # bytes`, so a commit rewriting the recording-selection logic showed no
+      # diff at all. The reviewer caught it by reading the file; nobody reading
+      # the diff could have.
+      #
+      # Git's own notion of binary is the test, via a diff against the empty
+      # tree: `-` in both numstat columns means binary. The WAV fixture is the
+      # one file that is legitimately so.
+      - name: Refuse a source file that git cannot diff
+        run: |
+          binary=$(git diff --numstat "$(git hash-object -t tree /dev/null)" HEAD \
+            | awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' \
+            | grep -v '^test/fixtures/.*\.wav$' || true)
+          if [ -n "$binary" ]; then
+            echo "git treats these tracked files as binary, so their changes never appear in a diff:"
+            echo "$binary"
+            echo "A stray NUL byte in a source file is the usual cause; write \\0 as an escape."
+            exit 1
+          fi
