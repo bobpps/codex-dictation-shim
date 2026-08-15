@@ -56,12 +56,19 @@ jobs:
       # `git add -f .env` or a copy of auth.json made during a drill is exactly
       # what this exists to catch — both would publish live credentials, and the
       # WAV rule exists because recordings are dictated speech.
+      #
+      # `logs/` is matched as a directory, not just by the `.log` suffix:
+      # .gitignore excludes the whole directory, so `logs/probe-output` or
+      # `logs/session.txt` are just as private and would otherwise sail through.
+      # Git pathspec globs match `/` with a plain `*`, so `logs/*` covers nested
+      # paths too; `**/logs/*` covers the directory appearing further down.
       - name: Refuse tracked secrets, recordings, and logs
         run: |
           tracked=$(git ls-files -- \
             '.env' '.env.*' ':(exclude).env.example' \
             'auth.json' '**/auth.json' \
-            '*.log' \
+            '*.log' 'npm-debug.log*' \
+            'logs/*' '**/logs/*' \
             '*.wav' ':(exclude)test/fixtures/*.wav')
           if [ -n "$tracked" ]; then
             echo "These files must never be committed:"
