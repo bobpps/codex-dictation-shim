@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile, stat } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readAuth } from '../src/auth.mjs';
 import { normalizeLanguage } from '../src/codex.mjs';
@@ -99,7 +100,14 @@ async function attempt(label, { url, audio, filename, headers, language, timeout
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const config = loadConfig(process.env, { dotEnvPath: null });
+
+  // The same `.env` the shim reads, from the same place. A probe configured
+  // differently from the thing it is probing answers a question nobody asked:
+  // it could look for credentials in the wrong CODEX_HOME, or test the endpoint
+  // with headers the shim will never send.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const config = loadConfig(process.env, { dotEnvPath: join(here, '..', '.env') });
+  if (config.dotEnvLoaded) console.log(`── using ${config.dotEnvPath}\n`);
 
   const auth = await readAuth({ codexHome: config.codexHome });
   const audioStat = await stat(args.file);
