@@ -1,11 +1,25 @@
-<?xml version="1.0" encoding="UTF-16"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!--
   Windows Task Scheduler definition.
 
-    install: schtasks /Create /TN "Codex Dictation Shim" /XML service\task-scheduler.xml
-    start:   schtasks /Run /TN "Codex Dictation Shim"
-    check:   curl -s localhost:8756/health
-    remove:  schtasks /Delete /TN "Codex Dictation Shim" /F
+  Install with PowerShell, which takes the definition as a string and so does
+  not care how the file is encoded:
+
+    $xml = Get-Content .\service\task-scheduler.xml -Raw
+    Register-ScheduledTask -TaskName "Codex Dictation Shim" -Xml $xml
+
+    start:  Start-ScheduledTask -TaskName "Codex Dictation Shim"
+    check:  curl.exe -s localhost:8756/health
+    remove: Unregister-ScheduledTask -TaskName "Codex Dictation Shim" -Confirm:$false
+
+  `schtasks /Create /XML` works too, but it has historically wanted the file in
+  UTF-16 and answers "The task XML is malformed" otherwise. This file is UTF-8,
+  and the declaration says so — declaring UTF-16 over single-byte content makes
+  every XML parser reject it on line 1, which is worse than either choice. If
+  schtasks refuses it on your machine, convert first:
+
+    Get-Content .\service\task-scheduler.xml | Out-File -Encoding Unicode .\task.xml
+    schtasks /Create /TN "Codex Dictation Shim" /XML .\task.xml
 
   Replace YOU in the three paths below, and confirm the node path with
   `where node`.
