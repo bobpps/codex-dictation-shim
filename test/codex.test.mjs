@@ -1,0 +1,220 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { describe, it } from 'node:test';
+
+import { normalizeLanguage, readAudio, transcribe } from '../src/codex.mjs';
+import { SAMPLE_WAV, startFakeTranscribe } from './helpers.mjs';
+
+/**
+ * The request to Codex, checked against a real HTTP server rather than a mock
+ * of `fetch`. What matters here is what goes over the wire — the headers the
+ * endpoint authorises on, and a multipart body that actually contains the WAV —
+ * and a stubbed `fetch` would let all of that be wrong while the test passed.
+ */
+
+const BASE = {
+  accessToken: 'token-value',
+  accountId: 'acct-42',
+  originator: 'codex_desktop',
+  userAgent: 'Codex Desktop/26.611.62324',
+  timeoutMs: 5000,
+};
+
+async function withServer(respond, run) {
+  const server = await startFakeTranscribe(respond);
+  try {
+    return await run(server);
+  } finally {
+    await server.close();
+  }
+}
+
+describe('the transcribe request', () => {
+  it('sends the audio with the headers the endpoint authorises on', async () => {
+    const audio = await readFile(SAMPLE_WAV);
+
+    await withServer(undefined, async (server) => {
+      const result = await transcribe({ ...BASE, audio, filename: 'handy-1.wav', url: server.url });
+
+      assert.equal(result.text, 'codex heard this');
+      assert.equal(result.status, 200);
+      assert.equal(result.requestId, 'req_fake_0001');
+
+      const [sent] = server.requests;
+      assert.equal(sent.method, 'POST');
+      assert.equal(sent.headers.authorization, 'Bearer token-value');
+      assert.equal(sent.headers['chatgpt-account-id'], 'acct-42');
+      assert.equal(sent.headers.originator, 'codex_desktop');
+      assert.equal(sent.headers['user-agent'], 'Codex Desktop/26.611.62324');
+      assert.match(sent.headers['content-type'], /^multipart\/form-data; boundary=/);
+
+      const body = sent.body.toString('latin1');
+      assert.match(body, /name="file"; filename="handy-1\.wav"/);
+      assert.match(body, /Content-Type: audio\/wav/i);
+      assert.ok(body.includes('RIFF'), 'the WAV bytes must actually be in the body');
+      assert.ok(sent.body.length > audio.length, 'body must carry the whole file');
+    });
+  });
+
+  it('omits the account header when auth.json has no account id', async () => {
+    // An empty header is not the same as no header, and the endpoint is
+    // entitled to treat them differently.
+    await withServer(undefined, async (server) => {
+      await transcribe({ ...BASE, accountId: null, audio: await readFile(SAMPLE_WAV), url: server.url });
+      assert.equal('chatgpt-account-id' in server.requests[0].headers, false);
+    });
+  });
+
+  it('sends a language hint only when there is a real one', async () => {
+    const audio = await readFile(SAMPLE_WAV);
+
+    await withServer(undefined, async (server) => {
+      await transcribe({ ...BASE, audio, url: server.url, language: 'en' });
+      await transcribe({ ...BASE, audio, url: server.url, language: 'auto' });
+      await transcribe({ ...BASE, audio, url: server.url, language: 'zh-Hant-TW' });
+
+      const bodies = server.requests.map((request) => request.body.toString('latin1'));
+      assert.match(bodies[0], /name="language"\r\n\r\nen/);
+      assert.ok(!bodies[1].includes('name="language"'), '"auto" is not a language the endpoint knows');
+      assert.match(bodies[2], /name="language"\r\n\r\nzh/);
+    });
+  });
+});
+
+describe('when the endpoint refuses', () => {
+  it('turns 401 into an error that names the fix', async () => {
+    await withServer(() => ({ status: 401, body: { detail: 'invalid token' } }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.equal(error.status, 502);
+          assert.equal(error.code, 'codex_upstream');
+          assert.match(error.message, /returned 401/);
+          assert.match(error.hint, /codex login status/);
+          return true;
+        },
+      );
+    });
+  });
+
+  it('explains a 413 as an audio-length limit', async () => {
+    await withServer(() => ({ status: 413, body: 'too long' }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.match(error.hint, /longer than the endpoint accepts/);
+          return true;
+        },
+      );
+    });
+  });
+
+  it('reports a non-JSON body instead of throwing a parse error', async () => {
+    await withServer(
+      () => ({ status: 200, body: '<html>blocked</html>', contentType: 'text/html' }),
+      async (server) => {
+        await assert.rejects(
+          transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+          (error) => {
+            assert.match(error.message, /body that is not JSON/);
+            assert.match(error.hint, /<html>blocked<\/html>/);
+            return true;
+          },
+        );
+      },
+    );
+  });
+
+  it('names the keys it did get when the response shape has moved', async () => {
+    // The response shape is one of the facts the plan could not verify without
+    // network access to the endpoint. When it turns out to be wrong, the error
+    // should be a one-line fix rather than a debugging session.
+    await withServer(() => ({ status: 200, body: { result: { content: 'hi' } } }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.match(error.message, /Tried text\/transcript\/transcription/);
+          assert.match(error.message, /response keys: result/);
+          return true;
+        },
+      );
+    });
+  });
+
+  it('accepts the alternative field names it knows about', async () => {
+    await withServer(() => ({ status: 200, body: { transcript: 'from another shape' } }), async (server) => {
+      const result = await transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url });
+      assert.equal(result.text, 'from another shape');
+    });
+  });
+
+  it('treats an empty transcript as a failure so the local draft survives', async () => {
+    await withServer(() => ({ status: 200, body: { text: '   ' } }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.match(error.message, /empty transcript/);
+          return true;
+        },
+      );
+    });
+  });
+
+  it('times out with its own status rather than hanging', async () => {
+    await withServer(() => ({ hang: true }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url, timeoutMs: 150 }),
+        (error) => {
+          assert.equal(error.status, 504);
+          assert.equal(error.code, 'codex_timeout');
+          assert.match(error.hint, /CODEX_TIMEOUT_MS/);
+          return true;
+        },
+      );
+    });
+  });
+
+  it('reports an unreachable endpoint as such', async () => {
+    const server = await startFakeTranscribe();
+    const url = server.url;
+    await server.close();
+
+    await assert.rejects(transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url }), (error) => {
+      assert.equal(error.status, 502);
+      assert.match(error.message, /Cannot reach/);
+      return true;
+    });
+  });
+});
+
+describe('normalizeLanguage', () => {
+  it('drops what the endpoint cannot use', () => {
+    assert.equal(normalizeLanguage('auto'), null);
+    assert.equal(normalizeLanguage('AUTO'), null);
+    assert.equal(normalizeLanguage('  '), null);
+    assert.equal(normalizeLanguage(null), null);
+  });
+
+  it('folds the script-qualified Chinese tags to zh', () => {
+    assert.equal(normalizeLanguage('zh-Hans'), 'zh');
+    assert.equal(normalizeLanguage('zh-hant'), 'zh');
+    assert.equal(normalizeLanguage('zh-Hans-CN'), 'zh');
+  });
+
+  it('passes everything else through untouched', () => {
+    assert.equal(normalizeLanguage('en'), 'en');
+    assert.equal(normalizeLanguage('ru-RU'), 'ru-RU');
+    assert.equal(normalizeLanguage('zh'), 'zh');
+  });
+});
+
+describe('readAudio', () => {
+  it('explains a recording that vanished after being claimed', async () => {
+    await assert.rejects(readAudio('/definitely/not/here.wav'), (error) => {
+      assert.equal(error.status, 503);
+      assert.equal(error.code, 'recording_read');
+      assert.match(error.hint, /retention/);
+      return true;
+    });
+  });
+});
