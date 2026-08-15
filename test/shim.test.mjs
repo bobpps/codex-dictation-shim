@@ -274,6 +274,43 @@ describe('privacy of the log', () => {
       },
     );
   });
+
+  it('keeps an unexpected response body out of the log and out of /health', async () => {
+    // The endpoint's response shape is unverified, so a 200 carrying plain text
+    // rather than JSON is possible — and that text is the speech. It must not
+    // reach the log, `lastError`, or `/health` with the privacy switch off.
+    const spoken = 'something private that was dictated out loud';
+
+    await withShim(
+      {
+        respond: () => ({ status: 200, body: spoken, contentType: 'text/plain' }),
+        recordings: [{ name: 'handy-1.wav', ageSec: 1 }],
+      },
+      async ({ complete, call, logger }) => {
+        const response = await complete(handyStructuredRequest());
+        assert.equal(response.status, 502);
+
+        const errorBody = await response.text();
+        const health = await (await call('/health')).text();
+
+        for (const [where, text] of [
+          ['the shim\'s own error response', errorBody],
+          ['the log', JSON.stringify(logger.lines)],
+          ['/health', health],
+        ]) {
+          // Every eight-character run, not just the whole sentence: the leak
+          // that survived the first review round was a fragment.
+          for (let at = 0; at + 8 <= spoken.length; at += 1) {
+            const fragment = spoken.slice(at, at + 8);
+            assert.ok(!text.includes(fragment), `speech fragment "${fragment}" leaked into ${where}`);
+          }
+        }
+
+        // Still diagnosable: the shape survives redaction.
+        assert.match(errorBody, /text\/plain/);
+      },
+    );
+  });
 });
 
 describe('diagnostics', () => {

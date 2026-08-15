@@ -16,8 +16,31 @@ import { recordingReadError, upstreamError, upstreamTimeoutError } from './error
 /** Field names accepted for the transcript, in order of preference. */
 const TEXT_FIELDS = ['text', 'transcript', 'transcription'];
 
-/** How much of an upstream error body is worth putting in a log line. */
+/** How much of an upstream body is worth putting in a log line, once revealed. */
 const ERROR_BODY_LIMIT = 500;
+
+/**
+ * Describe a response body for an error message, without quoting it by default.
+ *
+ * The endpoint's response shape is unverified, so "the body is not the
+ * transcript" is exactly the kind of assumption this project cannot make: a 200
+ * carrying plain text instead of JSON would put dictated speech into an error
+ * message, and from there into the log, into `lastError`, and out through
+ * `/health` — all with the privacy switch still off.
+ *
+ * The same rule covers error bodies too. An endpoint explaining a refusal is
+ * very unlikely to quote what was said, but "very unlikely" about an
+ * undocumented endpoint is a guess, and the cost of being wrong is speech in a
+ * log file. What survives redaction — status, content type, and length — is
+ * enough to tell an HTML interstitial from a JSON error from a plain-text
+ * transcript, which is what these messages are actually for.
+ */
+function describeBody(raw, contentType, reveal) {
+  const size = `${Buffer.byteLength(raw, 'utf8')} bytes of ${contentType ?? 'unknown content-type'}`;
+  return reveal
+    ? `${size}: ${truncate(raw, ERROR_BODY_LIMIT)}`
+    : `${size} (set SHIM_LOG_TRANSCRIPTS=1 to include the body)`;
+}
 
 /**
  * `auto` is Handy's word for "no preference" and is not a language the endpoint
@@ -67,6 +90,7 @@ export async function transcribe({
   userAgent,
   language = null,
   timeoutMs,
+  revealBodies = false,
   fetchImpl = fetch,
   now = Date.now,
 }) {
@@ -121,11 +145,12 @@ export async function transcribe({
 
   const elapsedMs = now() - startedAt;
   const requestId = response.headers?.get?.('x-request-id') ?? null;
+  const contentType = response.headers?.get?.('content-type') ?? null;
 
   if (!response.ok) {
     const body = await readBodySafely(response);
     throw upstreamError(
-      `Codex transcribe returned ${response.status}: ${truncate(body, ERROR_BODY_LIMIT)}`,
+      `Codex transcribe returned ${response.status} — ${describeBody(body, contentType, revealBodies)}`,
       describeUpstreamStatus(response.status),
     );
   }
@@ -134,10 +159,15 @@ export async function transcribe({
   let payload;
   try {
     payload = JSON.parse(raw);
-  } catch (error) {
+  } catch {
+    // The parser's own message is deliberately dropped rather than quoted:
+    // `JSON.parse` reports failures as `Unexpected token 's', "something "...`,
+    // quoting the start of its input. If that input is a plain-text transcript,
+    // the message carries the first words of it straight past the redaction
+    // above.
     throw upstreamError(
-      `Codex transcribe returned ${response.status} with a body that is not JSON: ${error.message}`,
-      `First ${ERROR_BODY_LIMIT} characters: ${truncate(raw, ERROR_BODY_LIMIT)}`,
+      `Codex transcribe returned ${response.status} with a body that is not JSON.`,
+      `Received ${describeBody(raw, contentType, revealBodies)}`,
     );
   }
 

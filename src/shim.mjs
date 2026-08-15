@@ -257,6 +257,9 @@ export async function createApp({ config, logger }) {
       userAgent: config.userAgent,
       language: config.language,
       timeoutMs: config.requestTimeoutMs,
+      // An unexpected response body could be the transcript itself, so it is
+      // held to the same privacy switch as one.
+      revealBodies: config.logTranscripts,
     });
 
     const content = field === null ? result.text : JSON.stringify({ [field]: result.text });

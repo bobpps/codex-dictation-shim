@@ -122,7 +122,7 @@ The ones that matter most:
 | `CODEX_ORIGINATOR` | `codex_desktop` | The endpoint starts rejecting this client string. |
 | `CODEX_USER_AGENT` | `Codex Desktop/26.611.62324` | The version pin is a consumable. |
 | `MAX_AGE_SEC` | `60` | Very long dictations, or a very slow local model. |
-| `SHIM_LOG_TRANSCRIPTS` | `0` | Debugging one specific mismatch. Turn it back off. |
+| `SHIM_LOG_TRANSCRIPTS` | `0` | Debugging one specific mismatch. Turn it back off. Also un-redacts unexpected response bodies — see below. |
 | `KEEPALIVE_ENABLED` | `1` | You already keep the token fresh some other way. |
 
 The client pin lives in configuration rather than in source on purpose: it is the first thing that
@@ -169,6 +169,13 @@ reserved for a body that is not JSON, a case Handy cannot produce.
 degradation here is indistinguishable from "Codex just misheard", and that bug would live for
 months.
 
+**An unexpected response body is treated as if it were the transcript.** The response shape is
+unverified, so a 200 carrying plain text rather than JSON is possible — and that text would be the
+speech. Error messages therefore report a body's status, content type, and length rather than
+quoting it, which is enough to tell an HTML interstitial from a JSON error from a transcript.
+`SHIM_LOG_TRANSCRIPTS=1` reveals it. The parser's own message is dropped for the same reason:
+`JSON.parse` reports failures by quoting the start of its input.
+
 **No refresh flow.** Implementing it would mean racing Codex for ownership of `auth.json` and
 impersonating the official client one step further. Instead: a clear error, Handy's fallback, and a
 daily `codex login status` keepalive in the same process.
@@ -197,7 +204,7 @@ below need a real desktop and are the ones that actually prove the feature.
 
 | # | Step | Evidence |
 | --- | --- | --- |
-| 01 | `node scripts/probe.mjs recording.wav --compare` | Response code and JSON shape from the real endpoint, real token TTL, and whether `originator` matters. Rerun with a long recording to find the length limit. |
+| 01 | `node scripts/probe.mjs recording.wav --compare` | Response code and JSON shape from the real endpoint, real token TTL, and whether `originator` matters. Prints status, type, size, and keys; add `--reveal` to print the transcript itself. Rerun with a long recording to find the length limit. |
 | 02 | `npm start` then `curl -s localhost:8756/health` | The actual `recordings/` path and a live token. |
 | 03 | Drop a known WAV into `recordings/`, POST `/v1/chat/completions` by hand, with a schema and without | Both response shapes, and text that matches the known recording. |
 | 04 | Dictate for real | The pasted text differs from the draft in Handy's history, and is better. |
@@ -232,8 +239,9 @@ curl -s localhost:8756/v1/chat/completions \
 - **Spoofing `originator` and `User-Agent`** is the signal unofficial clients are detected by. The
   risk is operational — action against the account — not legal. Keep this local, keep the repository
   private, do not hand it around.
-- **Logs quote dictated speech** if you turn `SHIM_LOG_TRANSCRIPTS` on. They are private
-  correspondence, not build output. The same goes for anything pasted into an issue.
+- **Logs quote dictated speech** if you turn `SHIM_LOG_TRANSCRIPTS` on, and so does
+  `probe.mjs --reveal`. They are private correspondence, not build output. The same goes for
+  anything pasted into an issue.
 - **The idle Whisper pass never goes away.** It is a property of the design.
 
 ## Layout

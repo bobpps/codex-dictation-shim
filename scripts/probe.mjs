@@ -22,25 +22,33 @@ import { loadConfig } from '../src/config.mjs';
  *   node scripts/probe.mjs recording.wav
  *   node scripts/probe.mjs recording.wav --language en
  *   node scripts/probe.mjs recording.wav --compare   (also try without originator)
+ *   node scripts/probe.mjs recording.wav --reveal    (print the transcript itself)
+ *
+ * A successful response contains what you said into the microphone, and this
+ * output usually ends up in terminal scrollback. So by default it reports the
+ * response's status, type, size, and keys — everything needed to learn the
+ * shape — and prints the text only when asked.
  */
 
+const USAGE =
+  'Usage: node scripts/probe.mjs <recording.wav> [--language xx] [--compare] [--reveal]';
+
 function parseArgs(argv) {
-  const args = { file: null, language: null, compare: false };
+  const args = { file: null, language: null, compare: false, reveal: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--compare') args.compare = true;
+    else if (arg === '--reveal') args.reveal = true;
     else if (arg === '--language') args.language = argv[++index] ?? null;
-    else if (arg.startsWith('--')) throw new Error(`Unknown option ${arg}`);
+    else if (arg.startsWith('--')) throw new Error(`Unknown option ${arg}. ${USAGE}`);
     else if (args.file === null) args.file = arg;
-    else throw new Error('Give exactly one WAV file.');
+    else throw new Error(`Give exactly one WAV file. ${USAGE}`);
   }
-  if (args.file === null) {
-    throw new Error('Usage: node scripts/probe.mjs <recording.wav> [--language xx] [--compare]');
-  }
+  if (args.file === null) throw new Error(USAGE);
   return args;
 }
 
-async function attempt(label, { url, audio, filename, headers, language, timeoutMs }) {
+async function attempt(label, { url, audio, filename, headers, language, timeoutMs, reveal }) {
   const form = new FormData();
   form.append('file', new Blob([audio], { type: 'audio/wav' }), filename);
   if (language !== null) form.append('language', language);
@@ -64,15 +72,28 @@ async function attempt(label, { url, audio, filename, headers, language, timeout
   console.log(`\n── ${label}`);
   console.log(`   status   ${response.status} ${response.statusText} in ${Date.now() - startedAt}ms`);
   console.log(`   headers  ${JSON.stringify(Object.fromEntries(response.headers))}`);
-  console.log(`   body     ${body.length > 2000 ? `${body.slice(0, 2000)}… (${body.length} chars)` : body}`);
+  console.log(
+    `   size     ${Buffer.byteLength(body, 'utf8')} bytes of ` +
+      `${response.headers.get('content-type') ?? 'unknown content-type'}`,
+  );
 
+  // Key names describe the shape, which is the point of the probe; the values
+  // are the speech, which is not.
   try {
     const parsed = JSON.parse(body);
     if (parsed !== null && typeof parsed === 'object') {
       console.log(`   keys     ${Object.keys(parsed).join(', ')}`);
+    } else {
+      console.log(`   keys     (body is JSON, but a ${typeof parsed} rather than an object)`);
     }
   } catch {
     console.log('   keys     (body is not JSON)');
+  }
+
+  if (reveal) {
+    console.log(`   body     ${body.length > 2000 ? `${body.slice(0, 2000)}… (${body.length} chars)` : body}`);
+  } else {
+    console.log('   body     hidden — it contains what you said. Rerun with --reveal to print it.');
   }
 }
 
@@ -117,6 +138,8 @@ async function main() {
     filename: basename(args.file),
     language: normalizeLanguage(args.language ?? config.language),
     timeoutMs: config.requestTimeoutMs,
+    // Same privacy switch the shim uses, plus an explicit flag for this run.
+    reveal: args.reveal || config.logTranscripts,
   };
 
   console.log(`\n── POST ${config.transcribeUrl}`);

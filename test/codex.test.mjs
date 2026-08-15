@@ -109,7 +109,7 @@ describe('when the endpoint refuses', () => {
     });
   });
 
-  it('reports a non-JSON body instead of throwing a parse error', async () => {
+  it('reports a non-JSON body by its shape, without quoting it', async () => {
     await withServer(
       () => ({ status: 200, body: '<html>blocked</html>', contentType: 'text/html' }),
       async (server) => {
@@ -117,12 +117,75 @@ describe('when the endpoint refuses', () => {
           transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
           (error) => {
             assert.match(error.message, /body that is not JSON/);
+            // Status, type, and length are enough to tell an HTML interstitial
+            // from a JSON error from a plain-text transcript.
+            assert.match(error.hint, /20 bytes of text\/html/);
+            assert.ok(!error.hint.includes('blocked'));
+            assert.match(error.hint, /SHIM_LOG_TRANSCRIPTS=1/);
+            return true;
+          },
+        );
+      },
+    );
+  });
+
+  it('never puts a plain-text success body into an error, log, or /health', async () => {
+    // The leak this guards against: the response shape is unverified, so a 200
+    // carrying text instead of JSON is possible — and that text is the speech.
+    // Without redaction it would reach the log and /health with the privacy
+    // switch still off, which is precisely what AGENTS.md forbids.
+    const spoken = 'my bank card number is written on the fridge';
+
+    await withServer(() => ({ status: 200, body: spoken, contentType: 'text/plain' }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          // Checked as every run of eight characters rather than as the whole
+          // string, because the leak that got through review the first time was
+          // a fragment: `JSON.parse` names the start of its input in the error
+          // it throws, so quoting that message quotes the speech.
+          for (let at = 0; at + 8 <= spoken.length; at += 1) {
+            const fragment = spoken.slice(at, at + 8);
+            assert.ok(!error.detail.includes(fragment), `speech fragment "${fragment}" leaked`);
+          }
+          assert.match(error.detail, new RegExp(`${Buffer.byteLength(spoken)} bytes of text/plain`));
+          return true;
+        },
+      );
+    });
+  });
+
+  it('quotes the body once the operator asks for it', async () => {
+    await withServer(
+      () => ({ status: 200, body: '<html>blocked</html>', contentType: 'text/html' }),
+      async (server) => {
+        await assert.rejects(
+          transcribe({
+            ...BASE,
+            audio: await readFile(SAMPLE_WAV),
+            url: server.url,
+            revealBodies: true,
+          }),
+          (error) => {
             assert.match(error.hint, /<html>blocked<\/html>/);
             return true;
           },
         );
       },
     );
+  });
+
+  it('holds error bodies to the same rule', async () => {
+    await withServer(() => ({ status: 400, body: { detail: 'bad audio' } }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url }),
+        (error) => {
+          assert.match(error.message, /returned 400/);
+          assert.ok(!error.message.includes('bad audio'));
+          return true;
+        },
+      );
+    });
   });
 
   it('names the keys it did get when the response shape has moved', async () => {
