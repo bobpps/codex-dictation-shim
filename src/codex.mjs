@@ -57,7 +57,26 @@ export function normalizeLanguage(value) {
   return language;
 }
 
-function describeUpstreamStatus(status) {
+/**
+ * A 403 that arrives as an HTML page is not the API refusing the token — the
+ * API answers in JSON. It is the bot-protection layer in front of chatgpt.com
+ * serving an interstitial, and observed on a real desktop it is intermittent:
+ * the same token and the same headers fail once and succeed a minute later.
+ */
+export function isBlockPage(status, contentType) {
+  return status === 403 && typeof contentType === 'string' && /^text\/html\b/i.test(contentType.trim());
+}
+
+/** Default pause before the single retry of a block page. */
+export const BLOCK_RETRY_DELAY_MS = 750;
+
+function describeUpstreamStatus(status, contentType) {
+  if (isBlockPage(status, contentType)) {
+    return (
+      'The bot-protection page in front of chatgpt.com refused the request, not the token. ' +
+      'This is usually transient; if it persists, run `node scripts/probe.mjs <wav> --compare` and check the response headers.'
+    );
+  }
   if (status === 401 || status === 403) {
     return 'The token was rejected. Run `codex login status`, then `codex login` if that does not help.';
   }
@@ -91,6 +110,7 @@ export async function transcribe({
   language = null,
   timeoutMs,
   revealBodies = false,
+  blockRetryDelayMs = BLOCK_RETRY_DELAY_MS,
   fetchImpl = fetch,
   now = Date.now,
 }) {
@@ -131,65 +151,92 @@ export async function transcribe({
   const startedAt = now();
   try {
     let response;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers,
-        body: form,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (timedOut) {
-        throw upstreamTimeoutError(
-          `Codex transcribe did not answer within ${timeoutMs}ms.`,
-          'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
-        );
-      }
-      // `error.message` is never used here. Measured behaviour of Node's fetch:
-      // a transport failure is the generic `fetch failed` with the real reason
-      // on `error.cause`, while a failure to *build* the request quotes the
-      // offending argument — and one of those arguments is
-      // `Authorization: Bearer <token>`. Taking the detail only from `cause`
-      // keeps the useful half and drops the half that can carry credentials.
-      const cause = error?.cause;
-      if (cause === null || cause === undefined) {
-        throw upstreamError(
-          `Cannot reach ${url}: the request could not be built (${error?.name ?? 'Error'}).`,
-          'Details are withheld because this error quotes its arguments, one of which is the access token. ' +
-            'A corrupted auth.json is the usual cause; run `codex login`.',
-        );
-      }
-      throw upstreamError(
-        `Cannot reach ${url}: ${cause.code ?? cause.message ?? String(cause)}`,
-        'Check network access to the endpoint from this machine.',
-      );
-    }
-
-    const requestId = response.headers?.get?.('x-request-id') ?? null;
-    const contentType = response.headers?.get?.('content-type') ?? null;
-
+    let requestId;
+    let contentType;
     let raw;
-    try {
-      raw = await response.text();
-    } catch (error) {
-      if (timedOut) {
-        throw upstreamTimeoutError(
-          `Codex transcribe sent headers but did not finish its body within ${timeoutMs}ms.`,
-          'The deadline covers the whole response, so Handy still gets an answer and falls back to the local transcript.',
+    let attempts = 0;
+
+    // At most two attempts, and only a block page earns the second one. The
+    // recording is already claimed for this request, so resending the same
+    // bytes cannot pick up another dictation's audio — the hazard README.md
+    // cites against retrying is the claim, not the upload. Every other failure
+    // still ends the request at once and lets Handy fall back.
+    for (;;) {
+      attempts += 1;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers,
+          body: form,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (timedOut) {
+          throw upstreamTimeoutError(
+            `Codex transcribe did not answer within ${timeoutMs}ms.`,
+            'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
+          );
+        }
+        // `error.message` is never used here. Measured behaviour of Node's fetch:
+        // a transport failure is the generic `fetch failed` with the real reason
+        // on `error.cause`, while a failure to *build* the request quotes the
+        // offending argument — and one of those arguments is
+        // `Authorization: Bearer <token>`. Taking the detail only from `cause`
+        // keeps the useful half and drops the half that can carry credentials.
+        const cause = error?.cause;
+        if (cause === null || cause === undefined) {
+          throw upstreamError(
+            `Cannot reach ${url}: the request could not be built (${error?.name ?? 'Error'}).`,
+            'Details are withheld because this error quotes its arguments, one of which is the access token. ' +
+              'A corrupted auth.json is the usual cause; run `codex login`.',
+          );
+        }
+        throw upstreamError(
+          `Cannot reach ${url}: ${cause.code ?? cause.message ?? String(cause)}`,
+          'Check network access to the endpoint from this machine.',
         );
       }
-      throw upstreamError(
-        `Codex transcribe sent ${response.status} but its body could not be read (${error?.code ?? error?.name ?? 'Error'}).`,
-        'The connection dropped part-way through the response.',
-      );
+
+      requestId = response.headers?.get?.('x-request-id') ?? null;
+      contentType = response.headers?.get?.('content-type') ?? null;
+
+      try {
+        raw = await response.text();
+      } catch (error) {
+        if (timedOut) {
+          throw upstreamTimeoutError(
+            `Codex transcribe sent headers but did not finish its body within ${timeoutMs}ms.`,
+            'The deadline covers the whole response, so Handy still gets an answer and falls back to the local transcript.',
+          );
+        }
+        throw upstreamError(
+          `Codex transcribe sent ${response.status} but its body could not be read (${error?.code ?? error?.name ?? 'Error'}).`,
+          'The connection dropped part-way through the response.',
+        );
+      }
+
+      if (attempts === 1 && isBlockPage(response.status, contentType)) {
+        // The same deadline covers the pause and the second attempt, so a retry
+        // can never stretch a dictation past CODEX_TIMEOUT_MS.
+        await pause(blockRetryDelayMs, controller.signal);
+        if (timedOut) {
+          throw upstreamTimeoutError(
+            `Codex transcribe did not answer within ${timeoutMs}ms (a block page was retried).`,
+            'Raise CODEX_TIMEOUT_MS if long dictations routinely hit this.',
+          );
+        }
+        continue;
+      }
+      break;
     }
 
     const elapsedMs = now() - startedAt;
 
     if (!response.ok) {
+      const retried = attempts > 1 ? ' after one retry' : '';
       throw upstreamError(
-        `Codex transcribe returned ${response.status} — ${describeBody(raw, contentType, revealBodies)}`,
-        describeUpstreamStatus(response.status),
+        `Codex transcribe returned ${response.status}${retried} — ${describeBody(raw, contentType, revealBodies)}`,
+        describeUpstreamStatus(response.status, contentType),
       );
     }
 
@@ -230,10 +277,24 @@ export async function transcribe({
       );
     }
 
-    return { text, status: response.status, requestId, elapsedMs };
+    return { text, status: response.status, requestId, elapsedMs, attempts };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Resolve after `ms`, or early once `signal` aborts; never rejects. */
+function pause(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 function extractText(payload) {
