@@ -297,6 +297,7 @@ export async function createApp({ config, logger }) {
       file: baseName(claim.path),
       chars: lastTranscription.chars,
       elapsedMs: result.elapsedMs,
+      attempts: result.attempts,
       upstreamRequest: result.requestId,
       text: logger.text(result.text),
     });

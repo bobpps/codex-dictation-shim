@@ -21,7 +21,7 @@
     Get-Content .\service\task-scheduler.xml | Out-File -Encoding Unicode .\task.xml
     schtasks /Create /TN "Codex Dictation Shim" /XML .\task.xml
 
-  Replace YOU in the three paths below, and confirm the node path with
+  Replace YOU in the path below, and confirm the node path with
   `where node`.
 
   Two settings are load-bearing rather than boilerplate:
@@ -35,6 +35,12 @@
   Task Scheduler starts the process with the machine PATH, not the one from
   your shell profile, so CODEX_CLI_BIN is set through the `.env` file rather
   than assumed. There is no environment block in this format.
+
+  The action runs scripts\start-hidden.cmd under conhost.exe in headless mode,
+  so there is no console window to close by accident, and the shim's output
+  goes to logs\shim.log instead of a window. Watch it with
+  scripts\show-log.cmd, or ask `curl.exe -s localhost:8756/health`. The last
+  argument is the node executable; keep it free of spaces or quote it.
 -->
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -77,8 +83,8 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Program Files\nodejs\node.exe</Command>
-      <Arguments>C:\Users\YOU\src\codex-dictation-shim\src\shim.mjs</Arguments>
+      <Command>C:\Windows\System32\conhost.exe</Command>
+      <Arguments>--headless cmd.exe /c scripts\start-hidden.cmd "C:\Program Files\nodejs\node.exe"</Arguments>
       <WorkingDirectory>C:\Users\YOU\src\codex-dictation-shim</WorkingDirectory>
     </Exec>
   </Actions>

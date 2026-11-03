@@ -82,6 +82,11 @@ It prints the recordings directory it found and the URL to give Handy. If it can
 For an always-on setup see [`service/`](service/): launchd for macOS, a systemd user unit for
 Linux, a Task Scheduler definition for Windows.
 
+On Windows the task runs [`scripts/start-hidden.cmd`](scripts/start-hidden.cmd) under
+`conhost.exe --headless`: no console window to close by accident, output appended to
+`logs/shim.log` (one previous file kept past about 5 MB). To watch it live, run
+[`scripts/show-log.cmd`](scripts/show-log.cmd); closing that window does not stop the shim.
+
 ### 2. Configure Handy
 
 No code changes. Settings only:
@@ -160,6 +165,14 @@ Claiming up front turns that second call into a clean guard rejection instead of
 transcription of the same audio. The trade is deliberate: a transient upstream failure is not
 retried inside one dictation, because a lost improvement is visible ("Handy pasted the draft") while
 a mis-attributed recording is not.
+
+**A block page gets exactly one retry.** A 403 that arrives as HTML is the bot-protection layer in
+front of chatgpt.com, not the API refusing the token (the API answers in JSON), and on a real
+desktop it proved intermittent: the same token and headers failed once and worked a minute later.
+So that one shape is retried once, after a short pause, inside the same `CODEX_TIMEOUT_MS`
+deadline. It is safe where a general retry is not: the recording is already claimed, so the second
+attempt resends the same bytes and cannot pick up another dictation. Every other failure still ends
+the request at once.
 
 **Shim failures never answer 400 or 422.** Those two make Handy retry the identical request with its
 reasoning fields stripped (`llm_client.rs`), which the shim ignores anyway — pure noise. 400 is

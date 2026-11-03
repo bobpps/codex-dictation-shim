@@ -97,6 +97,87 @@ describe('when the endpoint refuses', () => {
     });
   });
 
+  it('retries a block page once and returns the second answer', async () => {
+    // Observed on a real desktop: a 403 HTML interstitial from the protection
+    // layer, then success a minute later with the same token and headers.
+    const audio = await readFile(SAMPLE_WAV);
+    await withServer(
+      (_request, count) =>
+        count === 1
+          ? { status: 403, body: '<html>just a moment</html>', contentType: 'text/html; charset=UTF-8' }
+          : { status: 200, body: { text: 'codex heard this' } },
+      async (server) => {
+        const result = await transcribe({ ...BASE, audio, url: server.url, blockRetryDelayMs: 10 });
+
+        assert.equal(result.text, 'codex heard this');
+        assert.equal(result.attempts, 2);
+        assert.equal(server.requests.length, 2);
+        // The second attempt must carry the same recording, not just any body.
+        assert.ok(server.requests[1].body.includes('RIFF'));
+        assert.match(server.requests[1].body.toString('latin1'), /filename="handy\.wav"/);
+      },
+    );
+  });
+
+  it('gives up after one retry and blames the block page, not the token', async () => {
+    await withServer(
+      () => ({ status: 403, body: '<html>just a moment</html>', contentType: 'text/html; charset=UTF-8' }),
+      async (server) => {
+        await assert.rejects(
+          transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url, blockRetryDelayMs: 10 }),
+          (error) => {
+            assert.equal(error.status, 502);
+            assert.match(error.message, /returned 403 after one retry/);
+            assert.match(error.hint, /bot-protection page/);
+            assert.doesNotMatch(error.hint, /token was rejected/);
+            assert.ok(!error.message.includes('just a moment'));
+            return true;
+          },
+        );
+        assert.equal(server.requests.length, 2, 'exactly one retry');
+      },
+    );
+  });
+
+  it('does not retry a 403 that comes back as JSON', async () => {
+    // That one is the API itself refusing the token; a retry would only repeat it.
+    await withServer(() => ({ status: 403, body: { detail: 'forbidden' } }), async (server) => {
+      await assert.rejects(
+        transcribe({ ...BASE, audio: await readFile(SAMPLE_WAV), url: server.url, blockRetryDelayMs: 10 }),
+        (error) => {
+          assert.match(error.hint, /token was rejected/);
+          return true;
+        },
+      );
+      assert.equal(server.requests.length, 1);
+    });
+  });
+
+  it('keeps the retry inside the overall deadline', async () => {
+    await withServer(
+      () => ({ status: 403, body: '<html>x</html>', contentType: 'text/html' }),
+      async (server) => {
+        const startedAt = Date.now();
+        await assert.rejects(
+          transcribe({
+            ...BASE,
+            audio: await readFile(SAMPLE_WAV),
+            url: server.url,
+            timeoutMs: 100,
+            blockRetryDelayMs: 5_000,
+          }),
+          (error) => {
+            assert.equal(error.status, 504);
+            assert.equal(error.code, 'codex_timeout');
+            return true;
+          },
+        );
+        assert.ok(Date.now() - startedAt < 2000, 'the pause must not outlive the deadline');
+        assert.equal(server.requests.length, 1);
+      },
+    );
+  });
+
   it('explains a 413 as an audio-length limit', async () => {
     await withServer(() => ({ status: 413, body: 'too long' }), async (server) => {
       await assert.rejects(
