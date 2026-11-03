@@ -1,0 +1,2 @@
+# Batch files keep CRLF: cmd.exe misparses some LF-only scripts.
+*.cmd text eol=crlf
