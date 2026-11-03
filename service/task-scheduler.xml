@@ -24,7 +24,13 @@
   Replace YOU in the path below, and confirm the node path with
   `where node`.
 
-  Two settings are load-bearing rather than boilerplate:
+  Three settings are load-bearing rather than boilerplate:
+
+  - The logon trigger waits 30 seconds (`Delay` PT30S). Fired the moment the
+    user logs on, the action was observed to fail to launch with 0x80070003
+    (path not found) while the session was still coming up, and
+    `RestartOnFailure` did not retry a launch failure, so the shim simply
+    stayed down until started by hand.
 
   - `ExecutionTimeLimit` is PT0S, meaning no limit. The default is three days,
     after which Task Scheduler would kill a perfectly healthy shim and the next
@@ -50,6 +56,7 @@
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
+      <Delay>PT30S</Delay>
     </LogonTrigger>
   </Triggers>
   <Principals>
